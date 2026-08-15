@@ -240,6 +240,44 @@ names is provisional until a real export confirms it.
 explicit, so correcting the mapping later is a change in one place rather than a refactor.
 **Resolves when:** the first real integration export lands. Diff it against the mock output.
 
+### 4.7 Intake must not depend on the voice agent
+**Status:** ANSWERED — corrected 2026-08-15
+Call transcripts were being treated as *the* FAQ source. Most customers won't have a voice agent, so
+depending on it would mean the AEO product can't be sold standalone. Transcripts are now one
+optional high-quality source among several, not the foundation.
+
+**Source order, by how universally available each is:**
+1. **Website** — everyone has one, no credentials. Built.
+2. **Places API** — public Google data, needs only *our* API key, not the customer's authorization,
+   so a profile can be pre-filled during a sales call before anything is signed. Not built.
+3. **GBP API** — full profile including Q&A, posts, attributes. Needs the owner to OAuth. Not built.
+4. **CRM** — richest structured data, needs integration. Partly built (the export).
+5. **Call transcripts** — best FAQ source when it exists. Optional.
+6. **Generated** — build candidates from the service list when a site has nothing. Not built.
+
+### 4.8 The domain a customer gives you may not be their site
+**Status:** ANSWERED — handled in the crawler
+Found immediately on the first real run: `titanzplumbing.com` is a one-page landing shell whose only
+link points at `calltitanz.com`, the actual site. The crawler now detects a single page whose links
+all go to one non-social external host and says so, rather than reporting a thin crawl as a thin
+business.
+
+### 4.9 Services and service areas aren't extractable from most sites
+**Status:** OPEN
+The real run pulled 25 FAQs, full NAP, and both Florida license numbers — but zero services and zero
+areas, because the site publishes no `Service` or `areaServed` JSON-LD. Nav labels and page titles
+are the obvious fallback but they're noisy.
+**Mitigating factor:** for CRM-connected customers, services come from ServiceTitan and are better
+than anything scraped. This gap mostly matters for customers onboarded before their CRM is wired up.
+
+### 4.10 Extracted credentials are compliance claims
+**Status:** OPEN — deliberately low confidence
+Regex found `CFC1434184` and `CAC1824330` on the real site. Those look right, but a license number
+is a claim about compliance, and a wrong or lapsed one published as current is the worst kind of
+stale record.
+**Rule already enforced:** the API never serves expired credentials, and nothing extracted is
+approved automatically. Someone has to verify these against the state license lookup.
+
 ### 4.4 What does the intake pipeline pull from?
 **Status:** OPEN — design question, not yet urgent
 Candidate sources: CRM (services, price book, areas, skills), existing website crawl, Google Business

@@ -10,3 +10,7 @@ dist/
 # Exports and everything derived from them contain real customer and revenue
 # data. Kept local, never committed.
 data/
+
+# Intake output — extracted candidates from customer sites.
+# Unreviewed third-party content; not committed.
+content/intake/
