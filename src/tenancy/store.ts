@@ -31,6 +31,39 @@ export const CONTENT_KINDS: ContentKind[] = [
   "credentials",
 ];
 
+/**
+ * Where this client's infrastructure lives, and who owns it.
+ *
+ * The links save hunting for the right dashboard. The ownership fields are the
+ * more important half: they record whether an account belongs to the client or
+ * to us, which is what makes churn a matter of losing access rather than
+ * untangling custody of someone's DNS.
+ */
+export interface TenantLinks {
+  /** Direct link to the zone in whichever Cloudflare account holds it. */
+  cloudflareUrl: string;
+  cloudflareOwner: "" | "client" | "agency";
+  searchConsoleUrl: string;
+  /** The "manage" view, distinct from the public profile URL on the profile. */
+  gbpManageUrl: string;
+  hostingProvider: string;
+  hostingUrl: string;
+  registrar: string;
+  /** Where the site itself is edited — WP admin, Squarespace, etc. */
+  cmsUrl: string;
+}
+
+export const EMPTY_LINKS: TenantLinks = {
+  cloudflareUrl: "",
+  cloudflareOwner: "",
+  searchConsoleUrl: "",
+  gbpManageUrl: "",
+  hostingProvider: "",
+  hostingUrl: "",
+  registrar: "",
+  cmsUrl: "",
+};
+
 export interface TenantSettings {
   slug: string;
   name: string;
@@ -40,6 +73,7 @@ export interface TenantSettings {
   schemaType: string;
   /** Public URL of this tenant's API, once deployed. */
   apiBaseUrl: string;
+  links: TenantLinks;
   createdAt: string;
   notes: string;
 }
@@ -96,7 +130,9 @@ export function listTenantSlugs(): string[] {
 export function readSettings(slug: string): TenantSettings | null {
   if (!tenantExists(slug)) return null;
   try {
-    return JSON.parse(fs.readFileSync(settingsPath(slug), "utf8")) as TenantSettings;
+    const parsed = JSON.parse(fs.readFileSync(settingsPath(slug), "utf8")) as TenantSettings;
+    // Backfill so settings files written before a field existed still load.
+    return { ...parsed, links: { ...EMPTY_LINKS, ...(parsed.links ?? {}) } };
   } catch {
     return null;
   }
@@ -164,6 +200,7 @@ export function createTenant(input: {
     domain,
     schemaType: input.schemaType || "LocalBusiness",
     apiBaseUrl: "",
+    links: { ...EMPTY_LINKS },
     createdAt: new Date().toISOString(),
     notes: "",
   };
@@ -211,6 +248,7 @@ export function migrateLegacyContent(slug = "titanz"): boolean {
     domain,
     schemaType: "LocalBusiness",
     apiBaseUrl: "",
+    links: { ...EMPTY_LINKS },
     createdAt: new Date().toISOString(),
     notes: "Migrated from the single-client layout.",
   });

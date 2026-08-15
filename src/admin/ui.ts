@@ -91,6 +91,8 @@ label.f span{display:block;font-size:.76rem;color:var(--muted);margin-bottom:.2r
 .cols2{display:grid;grid-template-columns:1fr 1fr;gap:0 .9rem}
 .meta{color:var(--muted);font-size:.76rem;white-space:nowrap;text-align:right}
 .conf-low{color:var(--warn)}
+label.f a{color:var(--accent);text-decoration:none;font-size:.74rem}
+label.f a:hover{text-decoration:underline}
 code{background:rgba(128,128,128,.14);padding:.08rem .3rem;border-radius:4px;font-size:.85em}
 pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:.8rem;
   overflow:auto;max-height:420px;font-size:.78rem;margin:0;white-space:pre-wrap;word-break:break-word}
@@ -345,19 +347,47 @@ function publishingView(){
 }
 
 function settingsView(){
-  const s = detail.settings;
+  const s = detail.settings, L = s.links||{};
+  const link=(k,l,ph)=>'<label class="f"><span>'+l+
+    (L[k]?' &nbsp;<a href="'+esc(L[k])+'" target="_blank" rel="noopener">open ↗</a>':"")+
+    '</span><input data-l="'+k+'" value="'+esc(L[k]||"")+'" placeholder="'+esc(ph)+'"></label>';
+
   return '<h1>Settings</h1><div class="sub">Per-client configuration.</div>'+
-  '<div class="card"><div class="card-b">'+
+  '<div class="card"><div class="card-h"><h2>Business</h2></div><div class="card-b">'+
     '<label class="f"><span>Business name</span><input data-s="name" value="'+esc(s.name)+'"></label>'+
     '<label class="f"><span>Domain</span><input data-s="domain" value="'+esc(s.domain)+'"></label>'+
     '<label class="f"><span>schema.org type</span><select data-s="schemaType">'+
       ["LocalBusiness","Plumber","HVACBusiness","Electrician","RoofingContractor","GeneralContractor","HomeAndConstructionBusiness"]
         .map(t=>'<option '+(t===s.schemaType?"selected":"")+'>'+t+'</option>').join("")+'</select></label>'+
     '<label class="f"><span>Public API URL (once deployed)</span><input data-s="apiBaseUrl" value="'+esc(s.apiBaseUrl)+'" placeholder="https://api.'+esc(s.domain)+'"></label>'+
-    '<label class="f"><span>Notes</span><textarea data-s="notes">'+esc(s.notes)+'</textarea></label>'+
-    '<div class="row"><button class="btn primary" id="saveSettings">Save</button>'+
-    '<button class="btn danger" id="deleteClient">Delete client</button></div>'+
-  '</div></div>';
+  '</div></div>'+
+
+  '<div class="card"><div class="card-h"><h2>Accounts &amp; access</h2></div><div class="card-b">'+
+    '<div class="sub">Where this client\'s infrastructure lives. Ownership matters more than the links: '+
+    'an account the client owns means churn is losing access, not untangling custody of their DNS.</div>'+
+    '<label class="f"><span>Who owns the Cloudflare account?</span><select data-l="cloudflareOwner">'+
+      [["","— not set up —"],["client","The client owns it, we are a member"],["agency","We own it"]]
+        .map(([v,t])=>'<option value="'+v+'" '+(v===(L.cloudflareOwner||"")?"selected":"")+'>'+t+'</option>').join("")+
+    '</select></label>'+
+    (L.cloudflareOwner==="agency"
+      ? '<div class="banner warn" style="margin:.2rem 0 .8rem">Holding their nameservers means holding their DNS — site and email both. Fine, but it is custody you have to hand back cleanly if they leave.</div>'
+      : "")+
+    '<div class="cols2">'+
+      link("cloudflareUrl","Cloudflare zone","https://dash.cloudflare.com/…")+
+      link("searchConsoleUrl","Google Search Console","https://search.google.com/search-console?resource_id=…")+
+      link("gbpManageUrl","Google Business Profile (manage)","https://business.google.com/…")+
+      link("cmsUrl","Site admin","https://"+esc(s.domain)+"/wp-admin")+
+      link("hostingUrl","Hosting control panel","https://hpanel.hostinger.com/…")+
+      link("registrar","Domain registrar","")+
+    '</div>'+
+    '<label class="f"><span>Hosting provider</span><input data-l="hostingProvider" value="'+esc(L.hostingProvider||"")+'" placeholder="Hostinger"></label>'+
+  '</div></div>'+
+
+  '<div class="card"><div class="card-h"><h2>Notes</h2></div><div class="card-b">'+
+    '<textarea data-s="notes">'+esc(s.notes)+'</textarea></div></div>'+
+
+  '<div class="row"><button class="btn primary" id="saveSettings">Save</button>'+
+  '<button class="btn danger" id="deleteClient">Delete client</button></div>';
 }
 
 async function statusView(){
@@ -456,7 +486,9 @@ document.addEventListener("click", async e => {
     }
 
     if(t.id==="saveSettings"){
-      const body={}; document.querySelectorAll("[data-s]").forEach(el=>body[el.dataset.s]=el.value);
+      const body={links:{}};
+      document.querySelectorAll("[data-s]").forEach(el=>body[el.dataset.s]=el.value);
+      document.querySelectorAll("[data-l]").forEach(el=>body.links[el.dataset.l]=el.value.trim());
       await api("/clients/"+current+"/settings",{method:"PATCH",body:JSON.stringify(body)});
       toast("Settings saved."); await refresh(); return;
     }

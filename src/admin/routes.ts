@@ -195,6 +195,9 @@ export function createAdminRouter(): Router {
         apiBaseUrl:
           typeof req.body.apiBaseUrl === "string" ? req.body.apiBaseUrl : current.apiBaseUrl,
         notes: typeof req.body.notes === "string" ? req.body.notes : current.notes,
+        // Merged rather than replaced, so a partial save can't blank fields the
+        // form didn't send.
+        links: { ...current.links, ...(req.body.links ?? {}) },
       };
 
       writeSettings(next);
