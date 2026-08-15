@@ -6,6 +6,7 @@ import "dotenv/config";
  * Dumps raw JSON to data/raw/<timestamp>/ so we can design the schema against
  * what ServiceTitan actually holds, rather than against what we imagine it holds.
  *
+ *   npm run export -- --mock                          # no credentials needed
  *   npm run export -- --env production --history 12
  *   npm run export -- --only pricebook-services,job-types
  *   npm run export -- --list
@@ -22,6 +23,9 @@ interface Cli {
   includeLarge: boolean;
   list: boolean;
   dryRun: boolean;
+  mock: boolean;
+  seed: number;
+  jobCount: number;
 }
 
 function parseArgs(argv: string[]): Cli {
@@ -42,7 +46,19 @@ function parseArgs(argv: string[]): Cli {
     includeLarge: !has("--skip-large"),
     list: has("--list"),
     dryRun: has("--dry-run"),
+    mock: has("--mock"),
+    seed: Number(get("--seed") ?? 20260815),
+    jobCount: Number(get("--jobs") ?? 900),
   };
+}
+
+/** Pulls an HTTP status off a ServiceTitanApiError without importing the class. */
+function httpStatusOf(error: unknown): number | null {
+  if (error && typeof error === "object" && "status" in error) {
+    const status = (error as { status: unknown }).status;
+    if (typeof status === "number") return status;
+  }
+  return null;
 }
 
 async function main(): Promise<void> {
@@ -85,24 +101,36 @@ async function main(): Promise<void> {
     throw new Error("No targets selected. Run with --list to see available names.");
   }
 
-  const { getTenantId, ServiceTitanApiError } = await import("../servicetitan/auth");
-  const { fetchAllPages } = await import("../servicetitan/paginate");
   const { createRun, writeRecords, writeManifest } = await import("./output");
-
-  const tenantId = getTenantId();
-  const stEnv = process.env.ST_ENV as string;
   const run = createRun();
+
+  // In mock mode the ServiceTitan client is never imported. It resolves
+  // credentials at module load and would throw without a configured .env —
+  // the whole point of mock mode is running with no credentials at all.
+  const stEnv = cli.mock ? "mock" : (process.env.ST_ENV as string);
+  const tenantId = cli.mock
+    ? (process.env.ST_TENANT_ID ?? "mock-tenant")
+    : (await import("../servicetitan/auth")).getTenantId();
 
   console.log(`\nServiceTitan export`);
   console.log(`  environment : ${stEnv}`);
   console.log(`  tenant      : ${tenantId}`);
   console.log(`  targets     : ${selected.length}`);
-  console.log(`  throttle    : ${cli.delayMs}ms between pages, ${cli.pageSize} per page`);
+  if (cli.mock) {
+    console.log(`  seed        : ${cli.seed} (deterministic)`);
+    console.log(`  jobs        : ~${cli.jobCount} over ${cli.historyMonths} months`);
+  } else {
+    console.log(`  throttle    : ${cli.delayMs}ms between pages, ${cli.pageSize} per page`);
+  }
   console.log(`  output      : ${run.dir}`);
   if (cli.dryRun) console.log(`  DRY RUN — no requests will be made`);
   console.log("");
 
-  if (stEnv === "production") {
+  if (cli.mock) {
+    console.log(`  Mock data. Field shapes are modeled from memory, not from a real`);
+    console.log(`  response — good enough to build a pipeline against, not good enough`);
+    console.log(`  to finalize a schema against. See OPEN-QUESTIONS.md 4.5.\n`);
+  } else if (stEnv === "production") {
     // 10.1: this shares a tenant with the live phone agent.
     console.log(`  Production. Throttled and read-only, but the live voice agent shares`);
     console.log(`  this tenant's rate limits. Off-hours is the safe window.\n`);
@@ -112,21 +140,39 @@ async function main(): Promise<void> {
 
   for (const target of selected) {
     const basePath = `/${target.module}/v2/tenant/${tenantId}`;
-    const label = `${target.name}`;
 
     if (cli.dryRun) {
-      console.log(`  ${label}\n      GET ${basePath}${target.path}`);
+      console.log(`  ${target.name}\n      GET ${basePath}${target.path}`);
       results.push({ target: target.name, status: "skipped-dry-run" });
       continue;
     }
 
-    process.stdout.write(`  ${label} ... `);
+    process.stdout.write(`  ${target.name} ... `);
 
     try {
-      const records = await fetchAllPages(basePath, target.path, target.query ?? {}, {
-        pageSize: cli.pageSize,
-        delayMs: cli.delayMs,
-      });
+      let records: unknown[];
+
+      if (cli.mock) {
+        const { generateMockRecords } = await import("../mock/generate");
+        const mocked = generateMockRecords(target.name, {
+          seed: cli.seed,
+          historyMonths: cli.historyMonths,
+          jobCount: cli.jobCount,
+        });
+
+        if (mocked === null) {
+          console.log(`no mock implementation — skipped`);
+          results.push({ target: target.name, status: "skipped-no-mock" });
+          continue;
+        }
+        records = mocked;
+      } else {
+        const { fetchAllPages } = await import("../servicetitan/paginate");
+        records = await fetchAllPages(basePath, target.path, target.query ?? {}, {
+          pageSize: cli.pageSize,
+          delayMs: cli.delayMs,
+        });
+      }
 
       const file = writeRecords(run, target.name, records);
       console.log(`${records.length} records`);
@@ -142,7 +188,7 @@ async function main(): Promise<void> {
     } catch (error) {
       // One bad endpoint should not cost the whole run. Record and continue —
       // the failures are how we learn which paths and params are wrong.
-      const status = error instanceof ServiceTitanApiError ? error.status : null;
+      const status = httpStatusOf(error);
       const message = error instanceof Error ? error.message : String(error);
 
       console.log(`FAILED${status ? ` (${status})` : ""} — ${message}`);
@@ -155,7 +201,10 @@ async function main(): Promise<void> {
         endpoint: `${basePath}${target.path}`,
         query: target.query ?? null,
         uncertain: target.uncertain ?? null,
-        body: error instanceof ServiceTitanApiError ? error.body : null,
+        body:
+          error && typeof error === "object" && "body" in error
+            ? (error as { body: unknown }).body
+            : null,
       });
     }
   }
@@ -164,6 +213,8 @@ async function main(): Promise<void> {
     startedAt: run.startedAt,
     finishedAt: new Date().toISOString(),
     environment: stEnv,
+    mock: cli.mock,
+    seed: cli.mock ? cli.seed : null,
     tenantId,
     historyMonths: cli.historyMonths,
     pageSize: cli.pageSize,

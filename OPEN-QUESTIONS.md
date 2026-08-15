@@ -177,6 +177,23 @@ Job/invoice history can produce real distributions per job type. But "what moves
 down" is expertise, not data.
 **Blocks:** Whether onboarding is a two-week manual lift or a review-and-approve session.
 
+### 4.5 The mock data's field shapes are guesses
+**Status:** OPEN — accepted risk, deliberately taken
+ServiceTitan registration is postponed, so the build runs on generated mock data
+(`npm run export -- --mock`). The field names in `src/mock/generate.ts` are modeled from memory of
+the ServiceTitan v2 API, not from documentation or a real response.
+
+**What this is good for:** proving the pipeline — pagination, output layout, manifests, the
+invoice→job join, and every analysis and transform step downstream.
+
+**What it is not good for:** finalizing a schema. This reintroduces exactly the "designing against
+imagined data" problem the export was written to avoid. Anything shaped directly by these field
+names is provisional until a real export confirms it.
+
+**How to limit the damage:** keep the boundary between raw ServiceTitan shapes and our own schema
+explicit, so correcting the mapping later is a change in one place rather than a refactor.
+**Resolves when:** the first real integration export lands. Diff it against the mock output.
+
 ### 4.4 What does the intake pipeline pull from?
 **Status:** OPEN — design question, not yet urgent
 Candidate sources: CRM (services, price book, areas, skills), existing website crawl, Google Business
