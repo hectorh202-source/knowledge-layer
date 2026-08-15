@@ -1,0 +1,24 @@
+{
+  "name": "knowledge-layer",
+  "version": "0.1.0",
+  "description": "Structured business knowledge layer for home services companies, exposed to AI search and agents. TitanZ is tenant #1.",
+  "main": "dist/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "export": "tsx src/export/run.ts"
+  },
+  "dependencies": {
+    "axios": "^1.7.9",
+    "dotenv": "^16.4.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

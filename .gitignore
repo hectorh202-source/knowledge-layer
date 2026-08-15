@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Credentials — never commit
+.env
+.env.*
+!.env.example
+
+# Raw ServiceTitan exports contain real customer and revenue data.
+# Kept local, never committed.
+data/raw/
