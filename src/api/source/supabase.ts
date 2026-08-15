@@ -14,10 +14,10 @@ import type {
 /**
  * Serves the API from Supabase.
  *
- * Uses the ANON key, not the service role key. That is the security boundary of
- * this whole layer: row level security decides what the public can see, and the
- * anon key is what makes RLS apply. A service role key here would silently
- * expose unpublished drafts and every other tenant's data.
+ * Uses the ANON key, never the service role key. That is the security boundary
+ * of this layer: row level security decides what the public sees, and the anon
+ * key is what makes RLS apply. A service role key here would silently expose
+ * unpublished drafts and every other tenant's data.
  */
 export class SupabaseSource implements KnowledgeSource {
   readonly kind = "supabase" as const;
@@ -34,7 +34,7 @@ export class SupabaseSource implements KnowledgeSource {
     if (!url || !anonKey) {
       throw new Error(
         "SUPABASE_URL and SUPABASE_ANON_KEY are required for the supabase source. " +
-          "Use --source files to serve from local files instead."
+          "Use --source files to serve from local content instead."
       );
     }
 
@@ -60,36 +60,17 @@ export class SupabaseSource implements KnowledgeSource {
       .single();
 
     if (error || !data) {
-      throw new Error(`Tenant "${this.tenant}" not found. Has the loader run?`);
+      throw new Error(`Tenant "${this.tenant}" not found. Has content been loaded?`);
     }
 
     this.tenantIdCache = String((data as Record<string, unknown>).id);
     return this.tenantIdCache;
   }
 
-  /**
-   * Whether the most recent sync loaded generated data.
-   *
-   * Fails closed: if the sync history can't be read, assume mock. Being unable
-   * to prove data is real is not the same as it being real, and the cost of
-   * guessing wrong is publishing fabricated facts about a business.
-   */
-  async isMock(): Promise<boolean> {
-    try {
-      const tenantId = await this.tenantId();
-      const { data, error } = await this.client
-        .from("sync_runs")
-        .select("is_mock")
-        .eq("tenant_id", tenantId)
-        .order("started_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (error || !data) return true;
-      return (data as Record<string, unknown>).is_mock === true;
-    } catch {
-      return true;
-    }
+  /** Applies the approved-and-published gate unless previewing. */
+  private gate(query: any) {
+    if (this.includeUnreviewed) return query;
+    return query.eq("is_approved", true).eq("is_published", true);
   }
 
   async business(): Promise<BusinessDto | null> {
@@ -121,8 +102,8 @@ export class SupabaseSource implements KnowledgeSource {
       const h = row as Record<string, unknown>;
       return {
         day: Number(h.day_of_week),
-        opens: typeof h.opens === "string" ? h.opens : null,
-        closes: typeof h.closes === "string" ? h.closes : null,
+        opens: text(h.opens),
+        closes: text(h.closes),
         isClosed: h.is_closed === true,
       };
     });
@@ -156,117 +137,90 @@ export class SupabaseSource implements KnowledgeSource {
   async services(): Promise<ServiceDto[]> {
     const tenantId = await this.tenantId();
 
-    const { data, error } = await this.client
-      .from("services")
-      .select("display_name, category, description")
-      .eq("tenant_id", tenantId)
-      .eq("is_active", true)
-      .order("display_name");
+    const { data, error } = await this.gate(
+      this.client
+        .from("services")
+        .select("name, category, description")
+        .eq("tenant_id", tenantId)
+    ).order("sort_order");
 
     if (error) throw new Error(`Loading services failed: ${error.message}`);
 
-    return (data ?? []).map((row) => {
-      const r = row as Record<string, unknown>;
-      return {
-        name: String(r.display_name),
-        category: text(r.category),
-        description: text(r.description),
-      };
-    });
+    return (data ?? []).map((row: Record<string, unknown>) => ({
+      name: String(row.name),
+      category: text(row.category),
+      description: text(row.description),
+    }));
   }
 
   async serviceAreas(): Promise<ServiceAreaDto[]> {
     const tenantId = await this.tenantId();
 
-    const { data, error } = await this.client
-      .from("service_areas")
-      .select("name, zips, cities")
-      .eq("tenant_id", tenantId)
-      .eq("is_active", true)
-      .order("name");
+    const { data, error } = await this.gate(
+      this.client.from("service_areas").select("name, zips").eq("tenant_id", tenantId)
+    ).order("name");
 
     if (error) throw new Error(`Loading service areas failed: ${error.message}`);
 
-    return (data ?? []).map((row) => {
-      const r = row as Record<string, unknown>;
-      return {
-        name: String(r.name),
-        zips: Array.isArray(r.zips) ? r.zips.map(String) : [],
-        cities: Array.isArray(r.cities) ? r.cities.map(String) : [],
-      };
-    });
+    return (data ?? []).map((row: Record<string, unknown>) => ({
+      name: String(row.name),
+      zips: Array.isArray(row.zips) ? row.zips.map(String) : [],
+      cities: [String(row.name)],
+    }));
   }
 
   async brands(): Promise<BrandDto[]> {
     const tenantId = await this.tenantId();
 
-    const { data, error } = await this.client
-      .from("brands")
-      .select("name")
-      .eq("tenant_id", tenantId)
-      .eq("is_active", true)
-      .order("name");
+    const { data, error } = await this.gate(
+      this.client.from("brands").select("name").eq("tenant_id", tenantId)
+    ).order("name");
 
     if (error) throw new Error(`Loading brands failed: ${error.message}`);
-    return (data ?? []).map((row) => ({ name: String((row as Record<string, unknown>).name) }));
+    return (data ?? []).map((row: Record<string, unknown>) => ({ name: String(row.name) }));
   }
 
   async faqs(): Promise<FaqDto[]> {
     const tenantId = await this.tenantId();
 
-    let query = this.client
-      .from("faqs")
-      .select("question, answer")
-      .eq("tenant_id", tenantId)
-      .order("sort_order");
+    const { data, error } = await this.gate(
+      this.client.from("faqs").select("question, answer").eq("tenant_id", tenantId)
+    ).order("sort_order");
 
-    // Both gates lift together, matching the file source. Note that RLS also
-    // enforces approved-and-published for anonymous readers, so this flag can
-    // only widen results for a caller the policies already trust.
-    if (!this.includeUnreviewed) {
-      query = query.eq("is_approved", true).eq("is_published", true);
-    }
-
-    const { data, error } = await query;
     if (error) throw new Error(`Loading FAQs failed: ${error.message}`);
 
-    return (data ?? []).map((row) => {
-      const r = row as Record<string, unknown>;
-      return { question: String(r.question), answer: String(r.answer), service: null };
-    });
+    return (data ?? []).map((row: Record<string, unknown>) => ({
+      question: String(row.question),
+      answer: String(row.answer),
+      service: null,
+    }));
   }
 
   async credentials(): Promise<CredentialDto[]> {
     const tenantId = await this.tenantId();
 
-    let query = this.client
-      .from("credentials")
-      .select("kind, title, identifier, issuer, valid_until")
-      .eq("tenant_id", tenantId);
+    const { data, error } = await this.gate(
+      this.client
+        .from("credentials")
+        .select("kind, title, identifier, issuer, valid_until")
+        .eq("tenant_id", tenantId)
+    );
 
-    if (!this.includeUnreviewed) query = query.eq("is_published", true);
-
-    const { data, error } = await query;
     if (error) throw new Error(`Loading credentials failed: ${error.message}`);
 
     const today = new Date().toISOString().slice(0, 10);
 
     return (data ?? [])
-      // A lapsed license published as current is the worst kind of stale
-      // record — it's a claim about compliance that stopped being true.
-      .filter((row) => {
-        const validUntil = (row as Record<string, unknown>).valid_until;
+      .filter((row: Record<string, unknown>) => {
+        const validUntil = row.valid_until;
         return typeof validUntil !== "string" || validUntil >= today;
       })
-      .map((row) => {
-        const r = row as Record<string, unknown>;
-        return {
-          kind: String(r.kind),
-          title: String(r.title),
-          identifier: text(r.identifier),
-          issuer: text(r.issuer),
-        };
-      });
+      .map((row: Record<string, unknown>) => ({
+        kind: String(row.kind),
+        title: String(row.title),
+        identifier: text(row.identifier),
+        issuer: text(row.issuer),
+      }));
   }
 }
 

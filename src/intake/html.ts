@@ -4,6 +4,7 @@ import {
   type CredentialCandidate,
   type EntityCandidates,
   type FaqCandidate,
+  type ServiceCandidate,
 } from "./types";
 
 /**
@@ -198,6 +199,49 @@ export function extractMeta(html: string, url: string, into: EntityCandidates): 
       provenance: provenance("website", url, "og:site_name", "medium"),
     });
   }
+}
+
+/**
+ * Services from navigation and internal links.
+ *
+ * Most sites publish no `Service` markup, so their service list only exists as
+ * link text pointing at service pages. That's noisy — the same nav also holds
+ * "About", "Careers", "Financing" — so this filters to links whose path looks
+ * like a service page and whose text reads like a service rather than a page
+ * name. Low confidence throughout; the point is to save typing, not to be right.
+ */
+export function extractServices(html: string, url: string): ServiceCandidate[] {
+  const $ = cheerio.load(html);
+  const found = new Map<string, ServiceCandidate>();
+
+  // Paths that indicate a service page rather than a company page.
+  const servicePath = /\/(services?|plumbing|hvac|heating|cooling|air-conditioning|drain|sewer|water-heater|repair|installation|maintenance)(\/|$)/i;
+
+  // Link text that is a site section, not something you can buy.
+  const notAService =
+    /^(home|about|about us|contact|contact us|careers|blog|reviews|financing|coupons|specials|our team|service area|areas we serve|privacy|terms|book now|schedule|call now|menu|more|learn more|read more|view all|shop)$/i;
+
+  $("a[href]").each((_, element) => {
+    const href = $(element).attr("href") ?? "";
+    const text = $(element).text().replace(/\s+/g, " ").trim();
+
+    if (!text || text.length < 4 || text.length > 60) return;
+    if (notAService.test(text)) return;
+    if (!servicePath.test(href)) return;
+    // Anything with a digit or currency is a price or a phone number.
+    if (/[\d$]/.test(text)) return;
+
+    const key = text.toLowerCase();
+    if (found.has(key)) return;
+
+    found.set(key, {
+      name: text,
+      description: null,
+      provenance: provenance("website", url, "service page link text", "low"),
+    });
+  });
+
+  return [...found.values()];
 }
 
 function dedupeByQuestion(faqs: FaqCandidate[]): FaqCandidate[] {

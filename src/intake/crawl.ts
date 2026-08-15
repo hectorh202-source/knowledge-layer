@@ -6,7 +6,13 @@ import {
   extractServicesFromJsonLd,
   parseJsonLdBlocks,
 } from "./jsonld";
-import { extractContact, extractCredentials, extractFaqs, extractMeta } from "./html";
+import {
+  extractContact,
+  extractCredentials,
+  extractFaqs,
+  extractMeta,
+  extractServices,
+} from "./html";
 import {
   emptyEntityCandidates,
   type IntakeResult,
@@ -165,6 +171,7 @@ export async function crawlSite(options: CrawlOptions): Promise<IntakeResult> {
     extractContact(page.html, url, result.entity);
     result.faqs.push(...extractFaqs(page.html, url));
     result.credentials.push(...extractCredentials(page.html, url));
+    result.services.push(...extractServices(page.html, url));
 
     // --- discover more ------------------------------------------------------
     const $ = cheerio.load(page.html);

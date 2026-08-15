@@ -86,15 +86,6 @@ export interface KnowledgeSource {
   readonly kind: "supabase" | "files";
   readonly tenant: string;
 
-  /**
-   * True when the underlying data came from a generated export.
-   *
-   * Mock data attached to a real business name and phone number is the most
-   * dangerous thing this system can publish: fabricated services, publicly
-   * crawlable, on a surface built specifically for AI to quote. The server
-   * refuses to serve it in production.
-   */
-  isMock(): Promise<boolean>;
 
   business(): Promise<BusinessDto | null>;
   services(): Promise<ServiceDto[]>;

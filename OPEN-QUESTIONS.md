@@ -111,71 +111,30 @@ stated answer makes you easier to buy from.
 
 ---
 
-## 3. ServiceTitan & the CRM layer
+## 3. Sources
 
-### 3.1 Is ServiceTitan API access approved?
-**Status:** ANSWERED — Yes.
+### 3.0 CRM is out of scope for v1
+**Status:** ANSWERED — decided 2026-08-15
+All ServiceTitan and CRM code removed. The goal is making a business findable by AI, and a CRM
+integration is a gate in front of that — it blocks onboarding, only helps customers on one specific
+CRM, and none of it was needed. Recoverable from git history at  if it ever earns its way
+back as an optional enrichment.
 
-### 3.2 Does TitanZ already have ServiceTitan's AI Virtual Agent enabled?
-**Status:** OPEN
-It's shipped: greets customers, gathers info, books jobs using real-time ServiceTitan data and
-Adaptive Capacity (job type, location, required skill set).
-**Why it matters:** Building a parallel booking path that ignores capacity rules would be a step
-backward.
-**Blocks:** Any custom booking work.
+**The three sources, in priority order:**
+1. **Google Business Profile** — most authoritative, already curated by the owner
+2. **Their website** — whatever Google doesn't carry
+3. **Manual entry** — anything neither has
 
-### 3.3 Does an agent book, or does an agent hand off?
-**Status:** DEFERRED — start read-only
-Availability-read plus a booking link gets most of the value at a fraction of the liability.
-**Revisit when:** You've seen what agent traffic actually looks like. Especially important
-multi-tenant — a mis-booked-job incident across someone else's customer base is not absorbable solo.
+Everything is content a human approved, with the source recorded on every row. There is no longer a
+derived-versus-authored split, because nothing writes to the database automatically.
 
-### 3.4 Does the new ServiceTitan app registration have the right scopes?
-**Status:** DEFERRED — deliberately, by decision. Building first.
-The export needs at minimum Pricebook (services, categories, equipment), Settings (business units,
-technicians), JPM (jobs, job types), Dispatch (zones), and Accounting (invoices).
-**Why deferring is safe:** Building the exporter doesn't require scopes to be right. The first real
-run tells you exactly which are missing — a 403 per target, recorded in the run manifest.
-**Blocks:** Only the first successful production run, not the build.
-
-### 3.5 Which ServiceTitan environment do we export from?
-**Status:** OPEN
-A `--env` flag now switches per-run without editing `.env`, so this no longer blocks the build.
-**The tension:** Integration usually holds synthetic data, which cannot answer 4.1 or 4.3 — those
-need real revenue. Production can, but shares rate limits with the live phone agent (10.1).
-**Recommendation on file:** integration first to shake out endpoint paths and params, then one
-throttled production run off-hours for the real numbers.
-
-### 3.6 Are the export endpoint paths and filter params correct?
-**Status:** OPEN — the first run answers this
-Targets marked `uncertain` in `src/export/targets.ts`. The guessed parts:
-- `jobs` date filter may be `completedOnOrAfter` or `completedOnAfter`; `jobStatus` casing unverified
-- `invoices` date filter param unverified
-- Zone shape unknown — ZIP-based, polygon-based, or barely configured at all
-**How it resolves:** The runner records each failure with HTTP status and response body in the run
-manifest instead of aborting. One bad path costs one target, not the export.
-
-### 3.7 Where does job revenue actually live?
-**Status:** OPEN
-Revenue sits on **invoices**, not jobs — so revenue-per-service means joining invoices to jobs on
-`jobId`, then jobs to job types. Both the join key and whether invoices reliably carry `jobId` need
-confirming against real data.
-**Blocks:** 4.1 and 4.3 — the two questions the entire export exists to answer.
-
-### 3.8 Do we ever export customer locations?
-**Status:** OPEN — deliberately excluded for now
-`crm/locations` would give real service-area geography, but it's customer PII at volume. Dispatch
-zones are the lower-risk source for the same answer.
-**Revisit if:** zones turn out to be unconfigured, leaving locations as the only real geography
-source. Decide handling and retention before pulling it.
-
-### 3.9 What's the second CRM, and when?
-**Status:** DEFERRED
-Jobber and Housecall Pro are the likely candidates. Both expose less than ServiceTitan.
-**Why it matters now anyway:** The abstract adapter interface should be designed from day one even
-with one implementation. That refactor is always worse than estimated, and here it's the product.
-
----
+### 3.1 Two different Google APIs
+**Status:** OPEN — sequencing matters
+- **Places API (New)** — your key, no approval, no customer involvement. Hours, NAP, categories,
+  rating. Built (untested, see 4.11).
+- **Business Profile API** — services, owner-written description, Q&A, attributes. Needs Google to
+  approve your project *and* each customer to OAuth in. Not built.
+**Action:** submit the Business Profile API access request early; it's slow and blocks nothing else.
 
 ## 4. Data, content & intake
 

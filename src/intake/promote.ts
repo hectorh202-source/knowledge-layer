@@ -2,12 +2,21 @@ import "dotenv/config";
 import * as fs from "fs";
 import * as path from "path";
 import {
+  loadBrands,
   loadCredentials,
   loadFaqs,
+  loadServiceAreas,
+  loadServices,
+  saveBrands,
   saveCredentials,
   saveFaqs,
+  saveServiceAreas,
+  saveServices,
+  type BrandEntry,
   type CredentialEntry,
   type FaqEntry,
+  type ServiceAreaEntry,
+  type ServiceEntry,
 } from "../data/content";
 import type { Candidate, IntakeResult } from "./types";
 
@@ -100,6 +109,21 @@ function mergeIntake(results: IntakeResult[]): IntakeResult {
   }
 
   return merged;
+}
+
+/** Intake provenance in the shape the content files store. */
+function toProvenance(source: {
+  source: string;
+  url: string | null;
+  method: string;
+  confidence: "high" | "medium" | "low";
+}) {
+  return {
+    source: source.source,
+    url: source.url,
+    method: source.method,
+    confidence: source.confidence,
+  };
 }
 
 function normalizeQuestion(question: string): string {
@@ -299,16 +323,66 @@ async function main(): Promise<void> {
       },
     }));
 
-  console.log(`  FAQS`);
-  console.log(`    ${newFaqs.length} new, ${existingFaqs.length} already present`);
-  console.log(`    all new entries are approved=false`);
-  console.log("");
-  console.log(`  CREDENTIALS`);
-  console.log(`    ${newCredentials.length} new, ${existingCredentials.length} already present`);
+  // --- services, areas, brands --------------------------------------------
+  const key = (value: string) => value.toLowerCase().replace(/\s+/g, " ").trim();
+
+  const existingServices = loadServices();
+  const seenServices = new Set(existingServices.map((item) => key(item.name)));
+  const newServices: ServiceEntry[] = result.services
+    .filter((item) => !seenServices.has(key(item.name)))
+    .map((item) => ({
+      name: item.name,
+      category: null,
+      description: item.description,
+      approved: false,
+      published: false,
+      provenance: toProvenance(item.provenance),
+    }));
+
+  const existingAreas = loadServiceAreas();
+  const seenAreas = new Set(existingAreas.map((item) => key(item.name)));
+  const newAreas: ServiceAreaEntry[] = result.areas
+    .filter((item) => !seenAreas.has(key(item.name)))
+    .map((item) => ({
+      name: item.name,
+      zips: [],
+      approved: false,
+      published: false,
+      provenance: toProvenance(item.provenance),
+    }));
+
+  const existingBrands = loadBrands();
+  const seenBrands = new Set(existingBrands.map((item) => key(item.name)));
+  const newBrands: BrandEntry[] = result.brands
+    .filter((item) => !seenBrands.has(key(item.name)))
+    .map((item) => ({
+      name: item.name,
+      approved: false,
+      published: false,
+      provenance: toProvenance(item.provenance),
+    }));
+
+  const report: [string, number, number][] = [
+    ["services", newServices.length, existingServices.length],
+    ["service areas", newAreas.length, existingAreas.length],
+    ["brands", newBrands.length, existingBrands.length],
+    ["faqs", newFaqs.length, existingFaqs.length],
+    ["credentials", newCredentials.length, existingCredentials.length],
+  ];
+
+  console.log(`  CONTENT — everything new arrives approved=false`);
+  for (const [label, added, existing] of report) {
+    console.log(`    ${label.padEnd(14)} ${String(added).padStart(3)} new, ${existing} already present`);
+  }
   for (const credential of newCredentials) {
     console.log(`      ${credential.title}${credential.identifier ? ` — ${credential.identifier}` : ""}`);
   }
   console.log("");
+
+  if (newAreas.length > 0) {
+    console.log(`  ! Service areas arrived without postal codes. ZIPs are what let an`);
+    console.log(`    answer engine match a location exactly — add them by hand.\n`);
+  }
 
   if (dryRun) {
     console.log(`  Dry run complete. Nothing was written.\n`);
@@ -316,14 +390,13 @@ async function main(): Promise<void> {
   }
 
   fs.writeFileSync(PROFILE_FILE, JSON.stringify(profile, null, 2) + "\n", "utf8");
-  const faqFile = saveFaqs([...existingFaqs, ...newFaqs]);
-  const credentialFile = saveCredentials([...existingCredentials, ...newCredentials]);
+  saveServices([...existingServices, ...newServices]);
+  saveServiceAreas([...existingAreas, ...newAreas]);
+  saveBrands([...existingBrands, ...newBrands]);
+  saveFaqs([...existingFaqs, ...newFaqs]);
+  saveCredentials([...existingCredentials, ...newCredentials]);
 
-  console.log(`  Written:`);
-  console.log(`    ${PROFILE_FILE}`);
-  console.log(`    ${faqFile}`);
-  console.log(`    ${credentialFile}`);
-  console.log("");
+  console.log(`  Written to content/.\n`);
   console.log(`  Nothing is approved or published yet. Review the files, set`);
   console.log(`  approved and published where you're happy for an AI to say it,`);
   console.log(`  then run: npm run content:load\n`);

@@ -7,8 +7,6 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit",
-    "export": "tsx src/export/run.ts",
-    "load": "tsx src/db/load.ts",
     "api": "tsx src/api/server.ts",
     "catalog": "tsx src/catalog/run.ts",
     "content:load": "tsx src/db/load-content.ts",
@@ -19,7 +17,6 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",
-    "axios": "^1.7.9",
     "cheerio": "^1.2.0",
     "dotenv": "^16.4.7",
     "express": "^4.22.2"

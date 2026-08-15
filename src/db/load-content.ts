@@ -1,21 +1,30 @@
 import "dotenv/config";
 import { getSupabase, tenantSlug } from "./client";
-import { loadCredentials, loadFaqs } from "../data/content";
+import {
+  loadBrands,
+  loadCredentials,
+  loadFaqs,
+  loadServiceAreas,
+  loadServices,
+} from "../data/content";
 import { loadProfile, profileExists, validateProfile } from "../data/profile";
 
 /**
- * Loads AUTHORED content into Supabase.
+ * Loads the content files into Supabase.
  *
  *   npm run content:load -- --dry-run
  *   npm run content:load
+ *   npm run content:load -- --publish
  *
- * Deliberately a separate program from `npm run load`.
- *
- * The ServiceTitan loader is automated and runs on a schedule; this one is
- * human-driven and runs when someone has written something. Keeping them apart
- * means the automated path has no code path that can reach authored tables at
- * all — the separation is structural rather than a matter of care.
+ * Only approved entries are written at all. Unapproved candidates stay in the
+ * files where a person can see them, rather than sitting in the database one
+ * flag away from being served.
  */
+
+function sourceOf(provenance: { source: string } | undefined): string {
+  const source = provenance?.source;
+  return source === "gbp" || source === "places" || source === "website" ? source : "manual";
+}
 
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
@@ -25,17 +34,15 @@ async function main(): Promise<void> {
   };
 
   const dryRun = argv.includes("--dry-run");
-  const slug = get("--tenant") ?? tenantSlug();
   const publish = argv.includes("--publish");
+  const slug = get("--tenant") ?? tenantSlug();
 
-  console.log(`\nLoad authored content`);
+  console.log(`\nLoad content into Supabase`);
   console.log(`  tenant : ${slug}`);
   if (dryRun) console.log(`  DRY RUN — nothing will be written`);
   console.log("");
 
-  if (!profileExists()) {
-    throw new Error("content/business-profile.json not found.");
-  }
+  if (!profileExists()) throw new Error("content/business-profile.json not found.");
 
   const profile = loadProfile();
   if (!profile) throw new Error("Could not read content/business-profile.json");
@@ -45,8 +52,7 @@ async function main(): Promise<void> {
   if (validation.blocking.length > 0) {
     console.log(`  Blocking gaps — an AI cannot resolve this business without them:`);
     for (const field of validation.blocking) console.log(`    - ${field}`);
-    console.log("");
-    console.log(`  Fill these in content/business-profile.json and run again.`);
+    console.log(`\n  Fill these in content/business-profile.json and run again.`);
     console.log(`  Nothing was written.\n`);
     process.exit(1);
   }
@@ -57,11 +63,29 @@ async function main(): Promise<void> {
     console.log("");
   }
 
-  console.log(`  name          : ${profile.name}`);
-  console.log(`  phone         : ${profile.phone ?? "-"}`);
-  console.log(`  location      : ${[profile.address.city, profile.address.region].filter(Boolean).join(", ") || "-"}`);
-  console.log(`  hours defined : ${profile.hours.length}/7 days`);
-  console.log(`  publish       : ${publish ? "yes" : "no (loads as draft)"}`);
+  const services = loadServices().filter((item) => item.approved);
+  const areas = loadServiceAreas().filter((item) => item.approved);
+  const brands = loadBrands().filter((item) => item.approved);
+  const faqs = loadFaqs().filter((item) => item.approved);
+  const credentials = loadCredentials().filter((item) => item.approved);
+
+  const counts: [string, number, number][] = [
+    ["services", services.length, loadServices().length],
+    ["service areas", areas.length, loadServiceAreas().length],
+    ["brands", brands.length, loadBrands().length],
+    ["faqs", faqs.length, loadFaqs().length],
+    ["credentials", credentials.length, loadCredentials().length],
+  ];
+
+  console.log(`  name     : ${profile.name}`);
+  console.log(`  phone    : ${profile.phone ?? "-"}`);
+  console.log(`  location : ${[profile.address.city, profile.address.region].filter(Boolean).join(", ") || "-"}`);
+  console.log(`  hours    : ${profile.hours.filter((h: { isClosed: boolean }) => !h.isClosed).length} open day(s)\n`);
+
+  for (const [label, approved, total] of counts) {
+    const suffix = total > approved ? `   (${total - approved} awaiting approval)` : "";
+    console.log(`  ${label.padEnd(14)} ${String(approved).padStart(3)} approved${suffix}`);
+  }
   console.log("");
 
   if (dryRun) {
@@ -98,8 +122,7 @@ async function main(): Promise<void> {
       founded_year: profile.foundedYear,
       response_time: profile.responseTime,
       emergency_service: profile.emergencyService,
-      // Publishing is an explicit act. Loading a draft should never make it
-      // live by accident.
+      // Publishing is an explicit act — loading a draft must never make it live.
       is_published: publish,
     },
     { onConflict: "tenant_id" }
@@ -108,8 +131,8 @@ async function main(): Promise<void> {
   if (profileError) throw new Error(`Writing business profile failed: ${profileError.message}`);
 
   if (profile.hours.length > 0) {
-    const { error: hoursError } = await supabase.from("business_hours").upsert(
-      profile.hours.map((entry) => ({
+    const { error } = await supabase.from("business_hours").upsert(
+      profile.hours.map((entry: { day: number; opens: string | null; closes: string | null; isClosed: boolean }) => ({
         tenant_id: tenantId,
         day_of_week: entry.day,
         opens: entry.opens,
@@ -118,52 +141,91 @@ async function main(): Promise<void> {
       })),
       { onConflict: "tenant_id,day_of_week" }
     );
-
-    if (hoursError) throw new Error(`Writing business hours failed: ${hoursError.message}`);
+    if (error) throw new Error(`Writing business hours failed: ${error.message}`);
   }
 
-  // --- FAQs and credentials ------------------------------------------------
-  // Only approved entries are written at all. Unapproved candidates stay in
-  // the content files where a human can see them, rather than sitting in the
-  // database one flag away from being served.
-  const approvedFaqs = loadFaqs().filter((faq) => faq.approved);
-  if (approvedFaqs.length > 0) {
-    const { error } = await supabase.from("faqs").upsert(
-      approvedFaqs.map((faq, index) => ({
+  const write = async (table: string, rows: Record<string, unknown>[], conflict: string) => {
+    if (rows.length === 0) return;
+    const { error } = await supabase.from(table).upsert(rows, { onConflict: conflict });
+    if (error) throw new Error(`Writing ${table} failed: ${error.message}`);
+  };
+
+  await write(
+    "services",
+    services.map((item, index) => ({
+      tenant_id: tenantId,
+      name: item.name,
+      category: item.category,
+      description: item.description,
+      source: sourceOf(item.provenance),
+      is_approved: true,
+      is_published: item.published,
+      sort_order: index,
+    })),
+    "tenant_id,name"
+  );
+
+  await write(
+    "service_areas",
+    areas.map((item) => ({
+      tenant_id: tenantId,
+      name: item.name,
+      zips: item.zips,
+      source: sourceOf(item.provenance),
+      is_approved: true,
+      is_published: item.published,
+    })),
+    "tenant_id,name"
+  );
+
+  await write(
+    "brands",
+    brands.map((item) => ({
+      tenant_id: tenantId,
+      name: item.name,
+      source: sourceOf(item.provenance),
+      is_approved: true,
+      is_published: item.published,
+    })),
+    "tenant_id,name"
+  );
+
+  await write(
+    "faqs",
+    faqs.map((item, index) => ({
+      tenant_id: tenantId,
+      question: item.question,
+      answer: item.answer,
+      source: sourceOf(item.provenance),
+      is_approved: true,
+      is_published: item.published,
+      sort_order: index,
+    })),
+    "tenant_id,question"
+  );
+
+  if (credentials.length > 0) {
+    const { error } = await supabase.from("credentials").insert(
+      credentials.map((item) => ({
         tenant_id: tenantId,
-        question: faq.question,
-        answer: faq.answer,
-        origin: faq.provenance?.source === "website" ? "website" : "manual",
+        kind: item.kind,
+        title: item.title,
+        identifier: item.identifier,
+        issuer: item.issuer,
+        valid_until: item.validUntil,
+        source: sourceOf(item.provenance),
         is_approved: true,
-        is_published: faq.published,
-        sort_order: index,
-      }))
-    );
-    if (error) throw new Error(`Writing FAQs failed: ${error.message}`);
-  }
-
-  const approvedCredentials = loadCredentials().filter((c) => c.approved);
-  if (approvedCredentials.length > 0) {
-    const { error } = await supabase.from("credentials").upsert(
-      approvedCredentials.map((c) => ({
-        tenant_id: tenantId,
-        kind: c.kind,
-        title: c.title,
-        identifier: c.identifier,
-        issuer: c.issuer,
-        valid_until: c.validUntil,
-        is_published: c.published,
+        is_published: item.published,
       }))
     );
     if (error) throw new Error(`Writing credentials failed: ${error.message}`);
   }
 
-  console.log(`  Business profile and ${profile.hours.length} day(s) of hours written.`);
-  console.log(`  ${approvedFaqs.length} approved FAQ(s), ${approvedCredentials.length} approved credential(s).\n`);
+  console.log(`  Written.\n`);
 
   if (!publish) {
-    console.log(`  Loaded as a draft. The API will not serve it until published.`);
-    console.log(`  Re-run with --publish when it's been reviewed.\n`);
+    console.log(`  The business profile loaded as a draft, so the API will not serve it.`);
+    console.log(`  Re-run with --publish once it has been reviewed.\n`);
   }
 }
 

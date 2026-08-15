@@ -45,28 +45,16 @@ export async function buildJsonLd(
   source: KnowledgeSource,
   options: BuildJsonLdOptions
 ): Promise<JsonLdResult> {
-  // Published markup is the highest-stakes surface in the system — it exists
-  // to be believed without a human checking. CRM-derived nodes are omitted
-  // entirely when the CRM data is generated, rather than emitting invented
-  // services under a real business's name.
-  const crmIsMock = await source.isMock();
-
   const [business, services, areas, faqs, credentials, brands] = await Promise.all([
     source.business(),
-    crmIsMock ? Promise.resolve([]) : source.services(),
-    crmIsMock ? Promise.resolve([]) : source.serviceAreas(),
+    source.services(),
+    source.serviceAreas(),
     source.faqs(),
     source.credentials(),
-    crmIsMock ? Promise.resolve([]) : source.brands(),
+    source.brands(),
   ]);
 
   const warnings: string[] = [];
-  if (crmIsMock) {
-    warnings.push(
-      "CRM data is generated, so services, service areas and brands are omitted. " +
-        "Connect a real CRM export to include them."
-    );
-  }
   const included: string[] = [];
   const nodes: Record<string, unknown>[] = [];
 

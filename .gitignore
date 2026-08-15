@@ -16,7 +16,10 @@ data/
 content/intake/
 
 # Authored content — real business data, filled per-customer.
+content/business-profile.json
+content/services.json
+content/service-areas.json
+content/brands.json
 content/faqs.json
 content/credentials.json
-content/business-profile.json
 !content/business-profile.example.json
