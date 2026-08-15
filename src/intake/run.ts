@@ -3,6 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { crawlSite } from "./crawl";
 import type { Candidate, IntakeResult } from "./types";
+import { intakeDir, readSettings } from "../tenancy/store";
 
 /**
  * Website intake.
@@ -100,9 +101,11 @@ async function main(): Promise<void> {
     return i !== -1 ? argv[i + 1] : undefined;
   };
 
-  const site = get("--site");
+  const tenant = get("--tenant") ?? process.env.TENANT_SLUG ?? "titanz";
+  const settings = readSettings(tenant);
+  const site = get("--site") ?? (settings?.domain ? `https://${settings.domain}` : undefined);
   if (!site) {
-    throw new Error("--site is required, e.g. --site https://titanzplumbing.com");
+    throw new Error("No site. Pass --site, or set a domain on the client.");
   }
 
   const normalized = site.startsWith("http") ? site : `https://${site}`;
@@ -118,7 +121,7 @@ async function main(): Promise<void> {
 
   summarize(result);
 
-  const outDir = path.resolve(process.cwd(), "content", "intake", result.domain);
+  const outDir = intakeDir(tenant);
   fs.mkdirSync(outDir, { recursive: true });
   const outFile = path.join(outDir, "website.json");
   fs.writeFileSync(outFile, JSON.stringify(result, null, 2), "utf8");

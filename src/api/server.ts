@@ -103,7 +103,7 @@ async function main(): Promise<void> {
     }
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.setHeader("Cache-Control", "no-store");
-    res.send(renderDashboard(buildDashboardData()));
+    res.send(renderDashboard(buildDashboardData(options.tenant)));
   });
 
   /**

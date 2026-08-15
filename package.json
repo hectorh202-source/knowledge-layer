@@ -13,7 +13,8 @@
     "intake": "tsx src/intake/run.ts",
     "promote": "tsx src/intake/promote.ts",
     "intake:places": "tsx src/intake/run-places.ts",
-    "jsonld": "tsx src/jsonld/run.ts"
+    "jsonld": "tsx src/jsonld/run.ts",
+    "portal": "tsx src/admin/server.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",

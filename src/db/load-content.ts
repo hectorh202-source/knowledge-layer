@@ -42,9 +42,9 @@ async function main(): Promise<void> {
   if (dryRun) console.log(`  DRY RUN — nothing will be written`);
   console.log("");
 
-  if (!profileExists()) throw new Error("content/business-profile.json not found.");
+  if (!profileExists(slug)) throw new Error("content/business-profile.json not found.");
 
-  const profile = loadProfile();
+  const profile = loadProfile(slug);
   if (!profile) throw new Error("Could not read content/business-profile.json");
 
   const validation = validateProfile(profile);
@@ -63,18 +63,18 @@ async function main(): Promise<void> {
     console.log("");
   }
 
-  const services = loadServices().filter((item) => item.approved);
-  const areas = loadServiceAreas().filter((item) => item.approved);
-  const brands = loadBrands().filter((item) => item.approved);
-  const faqs = loadFaqs().filter((item) => item.approved);
-  const credentials = loadCredentials().filter((item) => item.approved);
+  const services = loadServices(slug).filter((item) => item.approved);
+  const areas = loadServiceAreas(slug).filter((item) => item.approved);
+  const brands = loadBrands(slug).filter((item) => item.approved);
+  const faqs = loadFaqs(slug).filter((item) => item.approved);
+  const credentials = loadCredentials(slug).filter((item) => item.approved);
 
   const counts: [string, number, number][] = [
-    ["services", services.length, loadServices().length],
-    ["service areas", areas.length, loadServiceAreas().length],
-    ["brands", brands.length, loadBrands().length],
-    ["faqs", faqs.length, loadFaqs().length],
-    ["credentials", credentials.length, loadCredentials().length],
+    ["services", services.length, loadServices(slug).length],
+    ["service areas", areas.length, loadServiceAreas(slug).length],
+    ["brands", brands.length, loadBrands(slug).length],
+    ["faqs", faqs.length, loadFaqs(slug).length],
+    ["credentials", credentials.length, loadCredentials(slug).length],
   ];
 
   console.log(`  name     : ${profile.name}`);

@@ -19,12 +19,13 @@ import {
   type ServiceEntry,
 } from "../data/content";
 import type { Candidate, IntakeResult } from "./types";
+import { intakeDir, profilePath, readSettings } from "../tenancy/store";
 
 /**
- * Promotes intake candidates into the authored content files.
+ * Promotes intake candidates into a client's content files.
  *
- *   npm run promote -- --domain calltitanz.com
- *   npm run promote -- --domain calltitanz.com --dry-run
+ *   npm run promote -- --tenant titanz
+ *   npm run promote -- --tenant titanz --dry-run
  *
  * TWO RULES, both structural rather than a matter of care:
  *
@@ -37,9 +38,6 @@ import type { Candidate, IntakeResult } from "./types";
  *    on the company's behalf, and a scraped license number is a compliance
  *    claim.
  */
-
-const CONTENT_DIR = path.resolve(process.cwd(), "content");
-const PROFILE_FILE = path.join(CONTENT_DIR, "business-profile.json");
 
 /** True when a profile field is still unset — blank, null, or a TODO marker. */
 function isUnset(value: unknown): boolean {
@@ -137,39 +135,42 @@ async function main(): Promise<void> {
     return i !== -1 ? argv[i + 1] : undefined;
   };
 
-  const domain = get("--domain");
-  if (!domain) throw new Error("--domain is required, e.g. --domain calltitanz.com");
+  const tenant = get("--tenant") ?? process.env.TENANT_SLUG ?? "titanz";
+  const settings = readSettings(tenant);
+  if (!settings) throw new Error(`No client "${tenant}". Create it in the portal first.`);
+
+  const domain = get("--domain") ?? settings.domain;
+  if (!domain) throw new Error(`Client "${tenant}" has no domain set.`);
 
   const dryRun = argv.includes("--dry-run");
-  const intakeDir = path.join(CONTENT_DIR, "intake", domain);
+  const dir = intakeDir(tenant);
+  const PROFILE_FILE = profilePath(tenant);
 
-  if (!fs.existsSync(intakeDir)) {
-    throw new Error(
-      `No intake found at ${intakeDir}. Run: npm run intake -- --site https://${domain}`
-    );
+  if (!fs.existsSync(dir)) {
+    throw new Error(`No intake found for "${tenant}". Run a source first.`);
   }
 
   // Merge every source that has run — website.json, places.json, and whatever
   // gets added later. Candidates from different sources agreeing on a value is
   // the strongest corroboration available without asking a human.
   const sourceFiles = fs
-    .readdirSync(intakeDir)
+    .readdirSync(dir)
     .filter((file) => file.endsWith(".json"))
     .sort();
 
   if (sourceFiles.length === 0) {
-    throw new Error(`No intake files in ${intakeDir}.`);
+    throw new Error(`No intake files for "${tenant}".`);
   }
 
   const sources = sourceFiles.map((file) => ({
     file,
-    result: JSON.parse(fs.readFileSync(path.join(intakeDir, file), "utf8")) as IntakeResult,
+    result: JSON.parse(fs.readFileSync(path.join(dir, file), "utf8")) as IntakeResult,
   }));
 
   const result = mergeIntake(sources.map((source) => source.result));
 
   console.log(`\nPromote intake candidates`);
-  console.log(`  domain  : ${domain}`);
+  console.log(`  client  : ${settings.name}`);
   console.log(`  sources : ${sourceFiles.join(", ")}`);
   if (dryRun) console.log(`  DRY RUN — nothing will be written`);
   console.log("");
@@ -281,7 +282,7 @@ async function main(): Promise<void> {
   }
 
   // --- FAQs ----------------------------------------------------------------
-  const existingFaqs = loadFaqs();
+  const existingFaqs = loadFaqs(tenant);
   const seenQuestions = new Set(existingFaqs.map((faq) => normalizeQuestion(faq.question)));
 
   const newFaqs: FaqEntry[] = result.faqs
@@ -300,7 +301,7 @@ async function main(): Promise<void> {
     }));
 
   // --- credentials ---------------------------------------------------------
-  const existingCredentials = loadCredentials();
+  const existingCredentials = loadCredentials(tenant);
   const seenCredentials = new Set(
     existingCredentials.map((c) => `${c.kind}:${(c.identifier ?? c.title).toLowerCase()}`)
   );
@@ -326,7 +327,7 @@ async function main(): Promise<void> {
   // --- services, areas, brands --------------------------------------------
   const key = (value: string) => value.toLowerCase().replace(/\s+/g, " ").trim();
 
-  const existingServices = loadServices();
+  const existingServices = loadServices(tenant);
   const seenServices = new Set(existingServices.map((item) => key(item.name)));
   const newServices: ServiceEntry[] = result.services
     .filter((item) => !seenServices.has(key(item.name)))
@@ -339,7 +340,7 @@ async function main(): Promise<void> {
       provenance: toProvenance(item.provenance),
     }));
 
-  const existingAreas = loadServiceAreas();
+  const existingAreas = loadServiceAreas(tenant);
   const seenAreas = new Set(existingAreas.map((item) => key(item.name)));
   const newAreas: ServiceAreaEntry[] = result.areas
     .filter((item) => !seenAreas.has(key(item.name)))
@@ -351,7 +352,7 @@ async function main(): Promise<void> {
       provenance: toProvenance(item.provenance),
     }));
 
-  const existingBrands = loadBrands();
+  const existingBrands = loadBrands(tenant);
   const seenBrands = new Set(existingBrands.map((item) => key(item.name)));
   const newBrands: BrandEntry[] = result.brands
     .filter((item) => !seenBrands.has(key(item.name)))
@@ -390,11 +391,11 @@ async function main(): Promise<void> {
   }
 
   fs.writeFileSync(PROFILE_FILE, JSON.stringify(profile, null, 2) + "\n", "utf8");
-  saveServices([...existingServices, ...newServices]);
-  saveServiceAreas([...existingAreas, ...newAreas]);
-  saveBrands([...existingBrands, ...newBrands]);
-  saveFaqs([...existingFaqs, ...newFaqs]);
-  saveCredentials([...existingCredentials, ...newCredentials]);
+  saveServices(tenant, [...existingServices, ...newServices]);
+  saveServiceAreas(tenant, [...existingAreas, ...newAreas]);
+  saveBrands(tenant, [...existingBrands, ...newBrands]);
+  saveFaqs(tenant, [...existingFaqs, ...newFaqs]);
+  saveCredentials(tenant, [...existingCredentials, ...newCredentials]);
 
   console.log(`  Written to content/.\n`);
   console.log(`  Nothing is approved or published yet. Review the files, set`);

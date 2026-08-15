@@ -9,6 +9,7 @@ import {
   type PlacesOptions,
 } from "./places";
 import type { IntakeResult } from "./types";
+import { intakeDir, readSettings } from "../tenancy/store";
 
 /**
  * Google Places intake.
@@ -20,7 +21,7 @@ import type { IntakeResult } from "./types";
  * intake, if present, to build the search query and to corroborate the match.
  */
 
-const CONTENT_DIR = path.resolve(process.cwd(), "content");
+
 
 /** Picks the most-agreed value from a candidate list. */
 function bestValue<T>(candidates: { value: T; provenance: { confidence: string } }[]): T | null {
@@ -47,8 +48,12 @@ async function main(): Promise<void> {
     return i !== -1 ? argv[i + 1] : undefined;
   };
 
-  const domain = get("--domain");
-  if (!domain) throw new Error("--domain is required, e.g. --domain calltitanz.com");
+  const tenant = get("--tenant") ?? process.env.TENANT_SLUG ?? "titanz";
+  const settings = readSettings(tenant);
+  if (!settings) throw new Error(`No client "${tenant}". Create it in the portal first.`);
+
+  const domain = get("--domain") ?? settings.domain;
+  if (!domain) throw new Error(`Client "${tenant}" has no domain set.`);
 
   const apiKey = get("--api-key") ?? process.env.GOOGLE_MAPS_API_KEY;
   if (!apiKey) {
@@ -62,7 +67,7 @@ async function main(): Promise<void> {
 
   // Reuse whatever the website crawl already established, both to build a good
   // search query and to corroborate the match.
-  const websiteFile = path.join(CONTENT_DIR, "intake", domain, "website.json");
+  const websiteFile = path.join(intakeDir(tenant), "website.json");
   let websiteIntake: IntakeResult | null = null;
   if (fs.existsSync(websiteFile)) {
     websiteIntake = JSON.parse(fs.readFileSync(websiteFile, "utf8")) as IntakeResult;
@@ -125,13 +130,13 @@ async function main(): Promise<void> {
 
   for (const note of intake.notes) console.log(`  ! ${note}\n`);
 
-  const outDir = path.join(CONTENT_DIR, "intake", domain);
+  const outDir = intakeDir(tenant);
   fs.mkdirSync(outDir, { recursive: true });
   const outFile = path.join(outDir, "places.json");
   fs.writeFileSync(outFile, JSON.stringify(intake, null, 2), "utf8");
 
   console.log(`  Candidates written to ${outFile}`);
-  console.log(`  Merge with: npm run promote -- --domain ${domain}\n`);
+  console.log(`  Merge with: npm run promote -- --tenant ${tenant}\n`);
 }
 
 main().catch((error) => {

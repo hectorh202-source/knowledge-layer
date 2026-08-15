@@ -72,8 +72,8 @@ function summarize(key: string, label: string, items: ReviewItem[]): ReviewSecti
   };
 }
 
-export function buildDashboardData(): DashboardData {
-  const profile = loadProfile();
+export function buildDashboardData(tenant: string): DashboardData {
+  const profile = loadProfile(tenant);
   const validation = profile
     ? validateProfile(profile)
     : { blocking: ["no business profile"], missing: [] };
@@ -94,7 +94,7 @@ export function buildDashboardData(): DashboardData {
       ]
     : [];
 
-  const services = loadServices().map<ReviewItem>((item) => ({
+  const services = loadServices(tenant).map<ReviewItem>((item) => ({
     primary: item.name,
     secondary: item.category,
     approved: item.approved,
@@ -103,7 +103,7 @@ export function buildDashboardData(): DashboardData {
     note: null,
   }));
 
-  const areas = loadServiceAreas().map<ReviewItem>((item) => ({
+  const areas = loadServiceAreas(tenant).map<ReviewItem>((item) => ({
     primary: item.name,
     secondary: item.zips.length > 0 ? item.zips.join(", ") : null,
     approved: item.approved,
@@ -113,7 +113,7 @@ export function buildDashboardData(): DashboardData {
     note: item.zips.length === 0 ? "no ZIP codes" : null,
   }));
 
-  const brands = loadBrands().map<ReviewItem>((item) => ({
+  const brands = loadBrands(tenant).map<ReviewItem>((item) => ({
     primary: item.name,
     secondary: null,
     approved: item.approved,
@@ -122,7 +122,7 @@ export function buildDashboardData(): DashboardData {
     note: null,
   }));
 
-  const faqs = loadFaqs().map<ReviewItem>((item) => ({
+  const faqs = loadFaqs(tenant).map<ReviewItem>((item) => ({
     primary: item.question,
     secondary: item.answer,
     approved: item.approved,
@@ -131,7 +131,7 @@ export function buildDashboardData(): DashboardData {
     note: null,
   }));
 
-  const credentials = loadCredentials().map<ReviewItem>((item) => ({
+  const credentials = loadCredentials(tenant).map<ReviewItem>((item) => ({
     primary: item.title,
     secondary: item.identifier,
     approved: item.approved,
