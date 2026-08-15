@@ -20,6 +20,13 @@ required for that. Most of it is settings and audit work, not building.
 - [x] Check robots.txt is not blocking AI crawlers — **clean.** Only `Disallow: /wp-admin/`, and the sitemap is declared.
 - [x] Site loads without login walls on the pages that matter — 14 pages crawled freely.
 - [ ] **FAILING — Site isn't blocking crawlers at the firewall or CDN level.**
+      **Hostinger confirmed (2026-08-15):** the 429 comes from Azure rate limits at
+      their infrastructure layer, not robots.txt. Their recommended fix is putting
+      **Cloudflare** in front, which also cuts load and improves speed. Cloudflare
+      is worth doing regardless — it's the same edge layer the catalog delivery
+      adapter would use later (OPEN-QUESTIONS 2.1).
+      Hostinger also flagged three site issues, all Tier 2 work: sitemap pollution,
+      duplicate geo pages, and utility pages needing `noindex`.
       **GPTBot gets a consistent `429 Too Many Requests`** across spaced retries,
       while a browser user agent gets `200` with identical timing. Response
       headers identify **Hostinger's CDN edge (`Server: hcdn`)** — `Content-Length: 0`,
