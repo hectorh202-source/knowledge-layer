@@ -95,6 +95,25 @@ Candidates in rough order of leverage: Cloudflare Worker (platform-agnostic, pro
 single lever), WordPress mu-plugin, nginx/Apache snippet, Netlify/Vercel rewrites.
 **Blocks:** Customer #2, if they're not on WordPress.
 
+### 2.4 Who owns the Cloudflare account?
+**Status:** OPEN — decide before customer #2
+One Cloudflare account holds unlimited zones, so a master account works technically. The real
+question is nameserver control: on the free plan, adding a domain means pointing its nameservers at
+Cloudflare, so whoever holds the account controls all their DNS — site and email both.
+
+**Options:** client owns the account with you added as a member (cleanest at churn, small onboarding
+friction); your master account holding every zone (fastest, but you hold DNS for businesses you
+don't own); or Cloudflare for SaaS, where clients keep DNS and CNAME to you (the proper
+multi-tenant answer, paid, overkill until there's volume).
+
+**Recommendation on file:** client-owned, you as a member. It matches the rest of the product —
+improving assets they own rather than taking custody — and it answers 2.3 cleanly, since churn just
+means losing access.
+
+**Caveat on the fix:** Cloudflare stops the 429 by absorbing crawler traffic at its cache, so
+requests never reach Hostinger's rate limiter. Uncached paths still pass through to origin. Verify
+with the Discoverability audit after it's live rather than assuming.
+
 ### 2.2 Should site access be a hard qualification gate at signup?
 **Status:** OPEN
 E.g. "we need Cloudflare on your domain, or edit access to the host."
