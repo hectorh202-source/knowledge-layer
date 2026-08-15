@@ -146,6 +146,18 @@ export function createTenant(input: {
     .replace(/^www\./, "")
     .replace(/\/.*$/, "");
 
+  // Two clients on one domain would generate conflicting JSON-LD and catalogs
+  // for the same site — a crawler would have no way to tell which is
+  // authoritative. The slug check above won't catch it, since slugs come from
+  // the business name.
+  const clash = listTenantSlugs()
+    .map(readSettings)
+    .find((existing) => existing?.domain && existing.domain.toLowerCase() === domain.toLowerCase());
+
+  if (clash) {
+    throw new Error(`"${clash.name}" already uses ${domain}. One client per domain.`);
+  }
+
   const settings: TenantSettings = {
     slug,
     name: input.name.trim(),

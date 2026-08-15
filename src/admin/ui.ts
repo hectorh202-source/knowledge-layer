@@ -123,24 +123,22 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 </div>
 
 <dialog id="newClient">
-  <form method="dialog">
-    <div class="dlg-b">
-      <h2 style="margin-bottom:.8rem">Add a client</h2>
-      <label class="f"><span>Business name</span><input id="ncName" placeholder="TitanZ Plumbing &amp; Air Conditioning" required></label>
-      <label class="f"><span>Website domain</span><input id="ncDomain" placeholder="calltitanz.com" required></label>
-      <label class="f"><span>Business type (schema.org)</span>
-        <select id="ncType">
-          <option>LocalBusiness</option><option>Plumber</option><option>HVACBusiness</option>
-          <option>Electrician</option><option>RoofingContractor</option>
-          <option>GeneralContractor</option><option>HomeAndConstructionBusiness</option>
-        </select></label>
-      <div class="sub" style="margin:0">Nothing is invented. The profile starts empty and fills from Google, then the website, then you.</div>
-    </div>
-    <div class="dlg-f">
-      <button class="btn" value="cancel">Cancel</button>
-      <button class="btn primary" id="ncGo" value="ok">Create</button>
-    </div>
-  </form>
+  <div class="dlg-b">
+    <h2 style="margin-bottom:.8rem">Add a client</h2>
+    <label class="f"><span>Business name</span><input id="ncName" placeholder="TitanZ Plumbing &amp; Air Conditioning"></label>
+    <label class="f"><span>Website domain</span><input id="ncDomain" placeholder="calltitanz.com"></label>
+    <label class="f"><span>Business type (schema.org)</span>
+      <select id="ncType">
+        <option>LocalBusiness</option><option>Plumber</option><option>HVACBusiness</option>
+        <option>Electrician</option><option>RoofingContractor</option>
+        <option>GeneralContractor</option><option>HomeAndConstructionBusiness</option>
+      </select></label>
+    <div class="sub" style="margin:0">Nothing is invented. The profile starts empty and fills from Google, then the website, then you.</div>
+  </div>
+  <div class="dlg-f">
+    <button class="btn" type="button" id="ncCancel">Cancel</button>
+    <button class="btn primary" type="button" id="ncGo">Create</button>
+  </div>
 </dialog>
 
 <div id="toast"></div>
@@ -459,15 +457,24 @@ document.addEventListener("click", async e => {
   }catch(err){ toast(err.message); }
 });
 
-$("ncGo").addEventListener("click", async e => {
+function closeNewClient(){ $("newClient").close(); $("ncName").value=""; $("ncDomain").value=""; }
+$("ncCancel").addEventListener("click", closeNewClient);
+
+// Buttons are type="button" and the dialog holds no form, so nothing submits on
+// its own. The dialog closes only after the client actually exists — otherwise
+// a failed create would close it and swallow the reason.
+$("ncGo").addEventListener("click", async () => {
   const name=$("ncName").value.trim(), domain=$("ncDomain").value.trim();
-  if(!name||!domain){ e.preventDefault(); toast("Name and domain are both required."); return; }
+  if(!name||!domain){ toast("Name and domain are both required."); return; }
+
+  const btn=$("ncGo"); btn.disabled=true;
   try{
     const r = await api("/clients",{method:"POST",body:JSON.stringify({name,domain,schemaType:$("ncType").value})});
+    closeNewClient();
     await loadClients(); await openClient(r.client.slug,"sources");
     toast("Client created. Pull from Google to fill the profile.");
-    $("ncName").value=""; $("ncDomain").value="";
-  }catch(err){ e.preventDefault(); toast(err.message); }
+  }catch(err){ toast(err.message); }
+  finally{ btn.disabled=false; }
 });
 
 (async()=>{
