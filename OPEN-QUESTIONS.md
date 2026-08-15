@@ -424,6 +424,21 @@ means we're guessing at how long to wait.
 **Fix, when it's worth it:** surface headers on `ServiceTitanApiError`. That's a change to the copied
 client, so it should happen at the same time as the shared-package extraction in 9.4, not before.
 
+### 10.6 Rate limiting is in-memory and single-instance
+**Severity:** Low now, blocking at deploy time
+`src/api/ratelimit.ts` keeps counters in a Map. It resets on restart and doesn't coordinate across
+replicas, so two instances behind a load balancer means double the intended limit.
+**Fix when deploying:** a shared store (Redis / Upstash), or the platform's own rate limiting
+(Cloudflare, Vercel). Not worth building before there's a host.
+
+### 10.7 No API authentication, by design
+**Severity:** Accepted, worth restating
+Everything the API serves is published content intended for crawlers and agents. There are no
+writes, no credentials, and no private data — so rate limiting is the only control, and CORS is
+deliberately wide open.
+**What would change this:** availability data (Layer 4). Live scheduling surfaces are a different
+risk profile than a price list, and that's the point to revisit auth.
+
 ### 10.5 Raw exports contain real customer and revenue data
 **Severity:** Medium, permanent
 `data/raw/` is gitignored, and each run writes to its own timestamped directory. That covers
@@ -487,6 +502,14 @@ rather than after.
   anon key so the policies actually apply.
 - **`price_stats` is append-only**, one row per job type per run, so pricing drift over time is
   visible rather than silently overwritten.
+- **The API serves only reviewed content.** `service_content` drives the pricing endpoint, not
+  `price_stats` — a service with statistics but no human-approved write-up simply does not appear.
+  Publishing an unreviewed statistical range would put thin samples in front of an AI as if they
+  were quotes. `--include-unreviewed` exists for local inspection only.
+- **The public API uses the Supabase ANON key**, never the service role key, so RLS actually
+  applies. The source constructor raises if the two keys match.
+- **`/openapi.json` is generated from the route registry**, never hand-written. The consumers are
+  machines with no human present to notice a spec that drifted from the code.
 - **What the export won't give you:** the factors that move a price up or down, FAQs, warranty and
   permit policies, credentials, brands serviced. ServiceTitan has the *what*, not the *why*. Those
   still need a human — but they're far easier to write while annotating a real service list than

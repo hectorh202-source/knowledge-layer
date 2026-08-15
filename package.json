@@ -9,14 +9,17 @@
     "typecheck": "tsc --noEmit",
     "export": "tsx src/export/run.ts",
     "analyze": "tsx src/analysis/run.ts",
-    "load": "tsx src/db/load.ts"
+    "load": "tsx src/db/load.ts",
+    "api": "tsx src/api/server.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",
     "axios": "^1.7.9",
-    "dotenv": "^16.4.7"
+    "dotenv": "^16.4.7",
+    "express": "^4.22.2"
   },
   "devDependencies": {
+    "@types/express": "^4.17.25",
     "@types/node": "^22.10.5",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3"
