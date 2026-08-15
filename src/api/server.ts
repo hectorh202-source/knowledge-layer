@@ -49,12 +49,57 @@ function parseArgs(argv: string[]): Options {
   };
 }
 
-function main(): void {
+/**
+ * Refuses to serve generated data publicly.
+ *
+ * This API exists to be read by crawlers and quoted by answer engines. Mock
+ * services attached to a real business name, phone number and address are
+ * fabricated claims about a real company, published on the one surface
+ * designed to be believed without a human checking.
+ *
+ * Local development is fine — the guard only trips in production, and even
+ * then can be overridden deliberately. It cannot be tripped by accident.
+ */
+async function assertSafeToServe(source: KnowledgeSource): Promise<void> {
+  const mock = await source.isMock();
+  if (!mock) return;
+
+  const isProduction = process.env.NODE_ENV === "production";
+  const override = process.env.ALLOW_MOCK_DATA === "true";
+
+  if (isProduction && !override) {
+    throw new Error(
+      "Refusing to start: the data is generated, and NODE_ENV=production.\n\n" +
+        "  Publishing mock services under a real business's name and phone number\n" +
+        "  would put fabricated claims in front of AI crawlers. Load a real export\n" +
+        "  first, or set ALLOW_MOCK_DATA=true if you genuinely mean to."
+    );
+  }
+
+  console.log(`\n  ! DATA IS GENERATED — not real business information.`);
+  if (isProduction) {
+    console.log(`    ALLOW_MOCK_DATA=true is set, so this is being served anyway.`);
+  } else {
+    console.log(`    Fine locally. This server will refuse to start with NODE_ENV=production.`);
+  }
+}
+
+async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
   const source: KnowledgeSource = createSource(options.source, {
     tenant: options.tenant,
     includeUnreviewed: options.includeUnreviewed,
   });
+
+  await assertSafeToServe(source);
+
+  if (options.includeUnreviewed && process.env.NODE_ENV === "production") {
+    throw new Error(
+      "Refusing to start: --include-unreviewed with NODE_ENV=production.\n\n" +
+        "  That serves content nobody has approved as though the business said it."
+    );
+  }
+
   const app = express();
 
   app.set("trust proxy", true);
@@ -159,4 +204,7 @@ function main(): void {
   });
 }
 
-main();
+main().catch((error) => {
+  console.error(`\n${error instanceof Error ? error.message : error}\n`);
+  process.exit(1);
+});

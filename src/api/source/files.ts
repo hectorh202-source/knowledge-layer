@@ -37,6 +37,10 @@ export class FileSource implements KnowledgeSource {
     this.dataset = loadDataset(dir ?? latestRunDir());
   }
 
+  async isMock(): Promise<boolean> {
+    return this.dataset.source.mock;
+  }
+
   async business(): Promise<BusinessDto | null> {
     const profile = loadProfile();
     if (!profile) return null;

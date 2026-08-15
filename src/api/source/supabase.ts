@@ -67,6 +67,31 @@ export class SupabaseSource implements KnowledgeSource {
     return this.tenantIdCache;
   }
 
+  /**
+   * Whether the most recent sync loaded generated data.
+   *
+   * Fails closed: if the sync history can't be read, assume mock. Being unable
+   * to prove data is real is not the same as it being real, and the cost of
+   * guessing wrong is publishing fabricated facts about a business.
+   */
+  async isMock(): Promise<boolean> {
+    try {
+      const tenantId = await this.tenantId();
+      const { data, error } = await this.client
+        .from("sync_runs")
+        .select("is_mock")
+        .eq("tenant_id", tenantId)
+        .order("started_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (error || !data) return true;
+      return (data as Record<string, unknown>).is_mock === true;
+    } catch {
+      return true;
+    }
+  }
+
   async business(): Promise<BusinessDto | null> {
     const tenantId = await this.tenantId();
 
