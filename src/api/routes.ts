@@ -3,11 +3,11 @@ import type { KnowledgeSource } from "./types";
 /**
  * The route registry — single source of truth for the API.
  *
- * Both the Express router and /openapi.json are generated from this table.
- * The build plan called for generating the OpenAPI doc from the routes rather
- * than hand-writing it, "because it'll drift from the code within a month."
- * A hand-written spec that lies about the API is worse than no spec, since the
- * whole point is machines consuming it without a human to notice.
+ * Both the Express router and /openapi.json are generated from this table, so
+ * a documented spec can't drift from the code. The consumers are machines with
+ * no human present to notice a mismatch, and the ARD catalog points at that
+ * spec — if it lies, an agent calls an endpoint that doesn't behave as
+ * advertised.
  *
  * Adding a route means adding one entry here. Forgetting to document it is
  * not possible.
@@ -17,19 +17,64 @@ export interface RouteDefinition {
   path: string;
   summary: string;
   description: string;
-  /** JSON Schema for a single item in the `data` array. */
+  /** JSON Schema for one item in `data`. */
   itemSchema: Record<string, unknown>;
-  /** Whether `data` is an array or a single object. */
   collection: boolean;
   handler: (source: KnowledgeSource) => Promise<unknown>;
 }
+
+const ADDRESS_SCHEMA = {
+  type: "object",
+  properties: {
+    street: { type: ["string", "null"] },
+    city: { type: ["string", "null"] },
+    region: { type: ["string", "null"], description: "State or province" },
+    postalCode: { type: ["string", "null"] },
+    country: { type: "string" },
+  },
+};
+
+const HOURS_SCHEMA = {
+  type: "object",
+  required: ["day", "isClosed"],
+  properties: {
+    day: { type: "integer", minimum: 0, maximum: 6, description: "0 = Sunday" },
+    opens: { type: ["string", "null"], description: "24-hour local time" },
+    closes: { type: ["string", "null"] },
+    isClosed: { type: "boolean" },
+  },
+};
+
+const BUSINESS_SCHEMA = {
+  type: "object",
+  required: ["name"],
+  properties: {
+    name: { type: "string" },
+    legalName: { type: ["string", "null"] },
+    description: { type: ["string", "null"] },
+    phone: {
+      type: ["string", "null"],
+      description: "Canonical number, consistent with every directory listing",
+    },
+    email: { type: ["string", "null"] },
+    domain: { type: ["string", "null"] },
+    address: ADDRESS_SCHEMA,
+    gbpUrl: { type: ["string", "null"], description: "Google Business Profile" },
+    foundedYear: { type: ["integer", "null"] },
+    responseTime: { type: ["string", "null"] },
+    emergencyService: { type: "boolean" },
+    hours: { type: "array", items: HOURS_SCHEMA },
+    serviceCount: { type: "integer" },
+    serviceAreaCount: { type: "integer" },
+  },
+};
 
 const SERVICE_SCHEMA = {
   type: "object",
   required: ["name"],
   properties: {
-    name: { type: "string", description: "Customer-facing service name" },
-    category: { type: ["string", "null"], description: "Grouping, e.g. Water Heaters" },
+    name: { type: "string" },
+    category: { type: ["string", "null"] },
     description: { type: ["string", "null"] },
   },
 };
@@ -42,42 +87,16 @@ const SERVICE_AREA_SCHEMA = {
     zips: {
       type: "array",
       items: { type: "string" },
-      description: "Real postal codes served. Not a marketing phrase.",
+      description: "Real postal codes served, so a location can be matched exactly",
     },
     cities: { type: "array", items: { type: "string" } },
   },
 };
 
-const PRICING_SCHEMA = {
+const BRAND_SCHEMA = {
   type: "object",
-  required: ["service", "currency", "low", "high", "unit", "factors"],
-  properties: {
-    service: { type: "string" },
-    currency: { type: "string", enum: ["USD"] },
-    low: { type: "number", description: "Low end of the typical range, not the cheapest job ever" },
-    high: { type: "number", description: "High end of the typical range, not the worst case" },
-    unit: { type: "string", enum: ["job"] },
-    factors: {
-      type: "array",
-      description: "What moves this price up or down. The reason the range is trustworthy.",
-      items: {
-        type: "object",
-        required: ["factor", "effect"],
-        properties: {
-          factor: { type: "string" },
-          effect: { type: "string", enum: ["up", "down", "varies"] },
-          detail: { type: "string" },
-        },
-      },
-    },
-    included: { type: "array", items: { type: "string" } },
-    excluded: { type: "array", items: { type: "string" } },
-    reviewedAt: {
-      type: ["string", "null"],
-      format: "date-time",
-      description: "When a human last verified this. Staleness is a public fact.",
-    },
-  },
+  required: ["name"],
+  properties: { name: { type: "string" } },
 };
 
 const FAQ_SCHEMA = {
@@ -90,22 +109,27 @@ const FAQ_SCHEMA = {
   },
 };
 
-const BUSINESS_SCHEMA = {
+const CREDENTIAL_SCHEMA = {
   type: "object",
-  required: ["name", "serviceCount", "serviceAreaCount"],
+  required: ["kind", "title"],
   properties: {
-    name: { type: "string" },
-    domain: { type: ["string", "null"] },
-    serviceCount: { type: "integer" },
-    serviceAreaCount: { type: "integer" },
+    kind: {
+      type: "string",
+      enum: ["license", "insurance", "certification", "bond", "membership", "award"],
+    },
+    title: { type: "string" },
+    identifier: { type: ["string", "null"] },
+    issuer: { type: ["string", "null"] },
   },
 };
 
 export const ROUTES: RouteDefinition[] = [
   {
     path: "/v1/business",
-    summary: "Business summary",
-    description: "Identity and headline counts for the business.",
+    summary: "Business identity",
+    description:
+      "Who this business is: name, contact details, address, hours, and service posture. " +
+      "The record an answer engine needs to resolve the business as a distinct entity.",
     itemSchema: BUSINESS_SCHEMA,
     collection: false,
     handler: (source) => source.business(),
@@ -113,7 +137,7 @@ export const ROUTES: RouteDefinition[] = [
   {
     path: "/v1/services",
     summary: "Services offered",
-    description: "Every active service the business sells.",
+    description: "Every active service the business provides.",
     itemSchema: SERVICE_SCHEMA,
     collection: true,
     handler: (source) => source.services(),
@@ -128,21 +152,28 @@ export const ROUTES: RouteDefinition[] = [
     handler: (source) => source.serviceAreas(),
   },
   {
-    path: "/v1/pricing",
-    summary: "Published price ranges",
-    description:
-      "Reviewed price ranges with the factors that move them. Only content a human has " +
-      "signed off on appears here — unreviewed statistical ranges are never served.",
-    itemSchema: PRICING_SCHEMA,
+    path: "/v1/brands",
+    summary: "Brands serviced",
+    description: "Equipment manufacturers this business installs and services.",
+    itemSchema: BRAND_SCHEMA,
     collection: true,
-    handler: (source) => source.pricing(),
+    handler: (source) => source.brands(),
   },
   {
     path: "/v1/faqs",
-    summary: "Frequently asked questions",
-    description: "Approved and published questions, drawn from what customers actually ask.",
+    summary: "Questions and answers",
+    description:
+      "Approved answers to questions customers actually ask, drawn from real calls.",
     itemSchema: FAQ_SCHEMA,
     collection: true,
     handler: (source) => source.faqs(),
+  },
+  {
+    path: "/v1/credentials",
+    summary: "Licenses and certifications",
+    description: "Current credentials. Expired entries are never served.",
+    itemSchema: CREDENTIAL_SCHEMA,
+    collection: true,
+    handler: (source) => source.credentials(),
   },
 ];

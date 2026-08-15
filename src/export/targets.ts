@@ -32,16 +32,7 @@ export interface ExportTarget {
   large?: boolean;
 }
 
-/** ISO date for N months ago, used for the job/invoice history window. */
-export function monthsAgoIso(months: number): string {
-  const d = new Date();
-  d.setMonth(d.getMonth() - months);
-  return d.toISOString();
-}
-
-export function buildTargets(historyMonths: number): ExportTarget[] {
-  const since = monthsAgoIso(historyMonths);
-
+export function buildTargets(): ExportTarget[] {
   return [
     // ---- The service catalog itself -------------------------------------
     {
@@ -99,26 +90,5 @@ export function buildTargets(historyMonths: number): ExportTarget[] {
       uncertain: "Zones may be defined by ZIP, by polygon, or barely configured at all.",
     },
 
-    // ---- Revenue history -------------------------------------------------
-    {
-      name: "jobs-completed",
-      module: "jpm",
-      path: "/jobs",
-      query: { completedOnOrAfter: since, jobStatus: "Completed" },
-      why: "Completed job history. With invoices, answers 4.1 (top revenue service) and 4.3 (real price ranges).",
-      uncertain:
-        "Filter param names are unverified — may be completedOnOrAfter / completedOnAfter, and jobStatus casing may differ.",
-      large: true,
-    },
-    {
-      name: "invoices",
-      module: "accounting",
-      path: "/invoices",
-      query: { createdOnOrAfter: since },
-      why: "Where the money actually lives. Join to jobs on jobId to get revenue per job type.",
-      uncertain:
-        "Revenue is on invoices, not jobs — join key and date filter param both need confirming on first run.",
-      large: true,
-    },
   ];
 }

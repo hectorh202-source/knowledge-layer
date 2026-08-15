@@ -38,12 +38,20 @@ export interface BuildResult {
   warnings: string[];
 }
 
-/** The capabilities the API can expose, and how to describe each one. */
+/**
+ * The capabilities the API can expose, and how to describe each one.
+ *
+ * /v1/business is first because it's the one that matters most: an answer
+ * engine that can't resolve the entity can't recommend it, so a catalog whose
+ * business record is missing is advertising a signpost with no address on it.
+ */
 const CAPABILITIES = [
+  { path: "/v1/business", label: "business identity, contact details, and hours" },
   { path: "/v1/services", label: "services offered" },
   { path: "/v1/service-areas", label: "service areas with postal codes" },
-  { path: "/v1/pricing", label: "reviewed price ranges" },
+  { path: "/v1/brands", label: "equipment brands serviced" },
   { path: "/v1/faqs", label: "answers to common customer questions" },
+  { path: "/v1/credentials", label: "licenses and certifications" },
 ];
 
 export async function buildCatalog(options: BuildOptions): Promise<BuildResult> {
@@ -86,7 +94,22 @@ export async function buildCatalog(options: BuildOptions): Promise<BuildResult> 
   const openapiProbe = await probeOpenApi(openapiUrl);
   probes.push(openapiProbe);
 
-  const canPublishApi = openapiProbe.ok && populated.length > 0;
+  // The business record is a hard requirement, not just one capability among
+  // several. A catalog that can't identify the business is a signpost with no
+  // address on it — an answer engine has nothing to attribute a recommendation
+  // to, so the rest of the content can't help it.
+  const hasIdentity = populated.some((label) => label.startsWith("business identity"));
+
+  if (!hasIdentity) {
+    excluded.push({
+      what: "API entry",
+      reason:
+        "/v1/business is empty — without an identifiable business there is nothing " +
+        "for an answer engine to attribute anything to",
+    });
+  }
+
+  const canPublishApi = openapiProbe.ok && hasIdentity && populated.length > 0;
 
   if (canPublishApi || options.allowUnverified) {
     if (!canPublishApi) {
@@ -110,7 +133,7 @@ export async function buildCatalog(options: BuildOptions): Promise<BuildResult> 
       what: "API entry",
       reason: `OpenAPI document not usable — ${openapiProbe.error}`,
     });
-  } else {
+  } else if (hasIdentity) {
     excluded.push({
       what: "API entry",
       reason:

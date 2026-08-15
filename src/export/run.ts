@@ -7,7 +7,7 @@ import "dotenv/config";
  * what ServiceTitan actually holds, rather than against what we imagine it holds.
  *
  *   npm run export -- --mock                          # no credentials needed
- *   npm run export -- --env production --history 12
+ *   npm run export -- --env production
  *   npm run export -- --only pricebook-services,job-types
  *   npm run export -- --list
  *
@@ -17,7 +17,6 @@ import "dotenv/config";
 interface Cli {
   env?: string;
   only?: string[];
-  historyMonths: number;
   delayMs: number;
   pageSize: number;
   includeLarge: boolean;
@@ -25,7 +24,6 @@ interface Cli {
   dryRun: boolean;
   mock: boolean;
   seed: number;
-  jobCount: number;
 }
 
 function parseArgs(argv: string[]): Cli {
@@ -40,7 +38,6 @@ function parseArgs(argv: string[]): Cli {
   return {
     env: get("--env"),
     only: only ? only.split(",").map((s) => s.trim()).filter(Boolean) : undefined,
-    historyMonths: Number(get("--history") ?? 12),
     delayMs: Number(get("--delay") ?? 500),
     pageSize: Number(get("--page-size") ?? 200),
     includeLarge: !has("--skip-large"),
@@ -48,7 +45,6 @@ function parseArgs(argv: string[]): Cli {
     dryRun: has("--dry-run"),
     mock: has("--mock"),
     seed: Number(get("--seed") ?? 20260815),
-    jobCount: Number(get("--jobs") ?? 900),
   };
 }
 
@@ -75,7 +71,7 @@ async function main(): Promise<void> {
   }
 
   const { buildTargets } = await import("./targets");
-  const targets = buildTargets(cli.historyMonths);
+  const targets = buildTargets();
 
   if (cli.list) {
     console.log("\nAvailable export targets:\n");
@@ -118,7 +114,6 @@ async function main(): Promise<void> {
   console.log(`  targets     : ${selected.length}`);
   if (cli.mock) {
     console.log(`  seed        : ${cli.seed} (deterministic)`);
-    console.log(`  jobs        : ~${cli.jobCount} over ${cli.historyMonths} months`);
   } else {
     console.log(`  throttle    : ${cli.delayMs}ms between pages, ${cli.pageSize} per page`);
   }
@@ -154,11 +149,7 @@ async function main(): Promise<void> {
 
       if (cli.mock) {
         const { generateMockRecords } = await import("../mock/generate");
-        const mocked = generateMockRecords(target.name, {
-          seed: cli.seed,
-          historyMonths: cli.historyMonths,
-          jobCount: cli.jobCount,
-        });
+        const mocked = generateMockRecords(target.name, { seed: cli.seed });
 
         if (mocked === null) {
           console.log(`no mock implementation — skipped`);
@@ -216,7 +207,6 @@ async function main(): Promise<void> {
     mock: cli.mock,
     seed: cli.mock ? cli.seed : null,
     tenantId,
-    historyMonths: cli.historyMonths,
     pageSize: cli.pageSize,
     delayMs: cli.delayMs,
     results,

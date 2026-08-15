@@ -179,6 +179,32 @@ with one implementation. That refactor is always worse than estimated, and here 
 
 ## 4. Data, content & intake
 
+### 4.0 Direction correction — pricing is not the organizing principle
+**Status:** ANSWERED — corrected 2026-08-15
+The build drifted into pricing because revenue was the easiest thing to compute from ServiceTitan,
+and easy to measure got mistaken for important. This is an AEO app: the goal is **being mentioned**,
+not being price-shopped.
+
+**What getting mentioned actually requires:**
+1. The AI can resolve the business as a distinct entity — NAP, hours, service area. Foundational;
+   nothing else works without it.
+2. Content matches the question shape. Question→answer is the citation mechanism, which makes FAQs
+   the highest-leverage content in the system.
+3. Coverage of the query surface — services × areas, "who does X in Y".
+4. Corroboration — reviews, directories, third-party mentions. AI weights agreement across sources.
+
+**Removed:** revenue analysis, price statistics, pricing endpoints, the pricing page template.
+Recoverable from git history at `b05b3b6` if it's ever wanted back as one field on a service page.
+**Kept from that work:** nothing pricing-specific. The mapping boundary (`src/data/normalize.ts`)
+survived because it was never about pricing.
+
+### 4.6 The biggest remaining gap is schema.org / JSON-LD
+**Status:** OPEN — highest-value unbuilt thing
+The ARD catalog is a bet on a standard with near-zero adoption. JSON-LD is what Google and every AI
+crawler consume **today**, from the WordPress site that already exists. It was flagged early and
+then skipped in favor of the speculative surface.
+**Blocks:** nothing technically. It's just the highest-return work not yet started.
+
 ### 4.1 Which TitanZ service brings in the most revenue?
 **Status:** OPEN
 **Why it matters:** That's the first pricing page. Highest-ticket, highest-volume job first; once one

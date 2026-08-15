@@ -1,10 +1,11 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type {
+  BrandDto,
   BusinessDto,
+  CredentialDto,
   FaqDto,
+  HoursDto,
   KnowledgeSource,
-  PriceFactorDto,
-  PricingDto,
   ServiceAreaDto,
   ServiceDto,
   SourceOptions,
@@ -13,10 +14,10 @@ import type {
 /**
  * Serves the API from Supabase.
  *
- * Uses the ANON key, not the service role key. That is deliberate and it is the
- * security boundary of this whole layer: row level security decides what the
- * public can see, and the anon key is what makes RLS apply. A service role key
- * here would silently expose unpublished drafts and every other tenant's data.
+ * Uses the ANON key, not the service role key. That is the security boundary of
+ * this whole layer: row level security decides what the public can see, and the
+ * anon key is what makes RLS apply. A service role key here would silently
+ * expose unpublished drafts and every other tenant's data.
  */
 export class SupabaseSource implements KnowledgeSource {
   readonly kind = "supabase" as const;
@@ -33,7 +34,7 @@ export class SupabaseSource implements KnowledgeSource {
     if (!url || !anonKey) {
       throw new Error(
         "SUPABASE_URL and SUPABASE_ANON_KEY are required for the supabase source. " +
-          "Use --source files to serve from the latest export instead."
+          "Use --source files to serve from local files instead."
       );
     }
 
@@ -66,23 +67,64 @@ export class SupabaseSource implements KnowledgeSource {
     return this.tenantIdCache;
   }
 
-  async business(): Promise<BusinessDto> {
+  async business(): Promise<BusinessDto | null> {
     const tenantId = await this.tenantId();
 
-    const { data } = await this.client
-      .from("tenants")
-      .select("name, domain")
-      .eq("id", tenantId)
-      .single();
+    let query = this.client
+      .from("business_profile")
+      .select(
+        "name, legal_name, description, phone, email, domain, street, city, region, " +
+          "postal_code, country, gbp_url, founded_year, response_time, emergency_service"
+      )
+      .eq("tenant_id", tenantId);
 
-    const [areas, services] = await Promise.all([this.serviceAreas(), this.services()]);
-    const row = (data ?? {}) as Record<string, unknown>;
+    if (!this.includeUnreviewed) query = query.eq("is_published", true);
+
+    const { data, error } = await query.maybeSingle();
+    if (error) throw new Error(`Loading business profile failed: ${error.message}`);
+    if (!data) return null;
+
+    const r = data as unknown as Record<string, unknown>;
+
+    const { data: hoursRows } = await this.client
+      .from("business_hours")
+      .select("day_of_week, opens, closes, is_closed")
+      .eq("tenant_id", tenantId)
+      .order("day_of_week");
+
+    const hours: HoursDto[] = (hoursRows ?? []).map((row) => {
+      const h = row as Record<string, unknown>;
+      return {
+        day: Number(h.day_of_week),
+        opens: typeof h.opens === "string" ? h.opens : null,
+        closes: typeof h.closes === "string" ? h.closes : null,
+        isClosed: h.is_closed === true,
+      };
+    });
+
+    const [services, areas] = await Promise.all([this.services(), this.serviceAreas()]);
 
     return {
-      name: typeof row.name === "string" ? row.name : this.tenant,
-      domain: typeof row.domain === "string" ? row.domain : null,
-      serviceAreaCount: areas.length,
+      name: String(r.name),
+      legalName: text(r.legal_name),
+      description: text(r.description),
+      phone: text(r.phone),
+      email: text(r.email),
+      domain: text(r.domain),
+      address: {
+        street: text(r.street),
+        city: text(r.city),
+        region: text(r.region),
+        postalCode: text(r.postal_code),
+        country: text(r.country) ?? "US",
+      },
+      gbpUrl: text(r.gbp_url),
+      foundedYear: typeof r.founded_year === "number" ? r.founded_year : null,
+      responseTime: text(r.response_time),
+      emergencyService: r.emergency_service === true,
+      hours,
       serviceCount: services.length,
+      serviceAreaCount: areas.length,
     };
   }
 
@@ -102,8 +144,8 @@ export class SupabaseSource implements KnowledgeSource {
       const r = row as Record<string, unknown>;
       return {
         name: String(r.display_name),
-        category: typeof r.category === "string" ? r.category : null,
-        description: typeof r.description === "string" ? r.description : null,
+        category: text(r.category),
+        description: text(r.description),
       };
     });
   }
@@ -130,73 +172,18 @@ export class SupabaseSource implements KnowledgeSource {
     });
   }
 
-  /**
-   * Pricing joins authored content to computed statistics.
-   *
-   * service_content is the driver, not price_stats. That ordering is the
-   * safeguard: a service with statistics but no reviewed write-up simply does
-   * not appear. Published numbers require a human to have signed off.
-   */
-  async pricing(): Promise<PricingDto[]> {
+  async brands(): Promise<BrandDto[]> {
     const tenantId = await this.tenantId();
 
-    let query = this.client
-      .from("service_content")
-      .select(
-        "headline, price_factors, included, excluded, override_low, override_high, reviewed_at, job_type_id"
-      )
-      .eq("tenant_id", tenantId);
+    const { data, error } = await this.client
+      .from("brands")
+      .select("name")
+      .eq("tenant_id", tenantId)
+      .eq("is_active", true)
+      .order("name");
 
-    if (!this.includeUnreviewed) {
-      query = query.eq("is_published", true);
-    }
-
-    const { data: content, error } = await query;
-    if (error) throw new Error(`Loading pricing content failed: ${error.message}`);
-    if (!content || content.length === 0) return [];
-
-    const jobTypeIds = content
-      .map((row) => (row as Record<string, unknown>).job_type_id)
-      .filter((id): id is string => typeof id === "string");
-
-    const { data: stats } = await this.client
-      .from("latest_price_stats")
-      .select("job_type_id, publish_low, publish_high, thin_sample")
-      .in("job_type_id", jobTypeIds);
-
-    const statsByJobType = new Map(
-      (stats ?? []).map((row) => {
-        const r = row as Record<string, unknown>;
-        return [String(r.job_type_id), r];
-      })
-    );
-
-    return content.flatMap((row) => {
-      const r = row as Record<string, unknown>;
-      const stat = statsByJobType.get(String(r.job_type_id));
-
-      // An explicit override always wins — it exists precisely for when the
-      // statistics are wrong or the sample is too thin to trust.
-      const low = numberOr(r.override_low, stat?.publish_low);
-      const high = numberOr(r.override_high, stat?.publish_high);
-
-      // No range from either source means there is nothing citable to publish.
-      if (low === null || high === null) return [];
-
-      return [
-        {
-          service: String(r.headline),
-          currency: "USD" as const,
-          low,
-          high,
-          unit: "job" as const,
-          factors: parseFactors(r.price_factors),
-          included: Array.isArray(r.included) ? r.included.map(String) : [],
-          excluded: Array.isArray(r.excluded) ? r.excluded.map(String) : [],
-          reviewedAt: typeof r.reviewed_at === "string" ? r.reviewed_at : null,
-        },
-      ];
-    });
+    if (error) throw new Error(`Loading brands failed: ${error.message}`);
+    return (data ?? []).map((row) => ({ name: String((row as Record<string, unknown>).name) }));
   }
 
   async faqs(): Promise<FaqDto[]> {
@@ -204,59 +191,56 @@ export class SupabaseSource implements KnowledgeSource {
 
     let query = this.client
       .from("faqs")
-      .select("question, answer, job_type_id")
+      .select("question, answer")
       .eq("tenant_id", tenantId)
       .eq("is_approved", true)
       .order("sort_order");
 
-    if (!this.includeUnreviewed) {
-      query = query.eq("is_published", true);
-    }
+    if (!this.includeUnreviewed) query = query.eq("is_published", true);
 
     const { data, error } = await query;
     if (error) throw new Error(`Loading FAQs failed: ${error.message}`);
 
     return (data ?? []).map((row) => {
       const r = row as Record<string, unknown>;
-      return {
-        question: String(r.question),
-        answer: String(r.answer),
-        service: null,
-      };
+      return { question: String(r.question), answer: String(r.answer), service: null };
     });
   }
-}
 
-function numberOr(primary: unknown, fallback: unknown): number | null {
-  const first = toNumber(primary);
-  if (first !== null) return first;
-  return toNumber(fallback);
-}
+  async credentials(): Promise<CredentialDto[]> {
+    const tenantId = await this.tenantId();
 
-function toNumber(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string" && value.trim() !== "") {
-    const parsed = Number(value);
-    if (Number.isFinite(parsed)) return parsed;
+    let query = this.client
+      .from("credentials")
+      .select("kind, title, identifier, issuer, valid_until")
+      .eq("tenant_id", tenantId);
+
+    if (!this.includeUnreviewed) query = query.eq("is_published", true);
+
+    const { data, error } = await query;
+    if (error) throw new Error(`Loading credentials failed: ${error.message}`);
+
+    const today = new Date().toISOString().slice(0, 10);
+
+    return (data ?? [])
+      // A lapsed license published as current is the worst kind of stale
+      // record — it's a claim about compliance that stopped being true.
+      .filter((row) => {
+        const validUntil = (row as Record<string, unknown>).valid_until;
+        return typeof validUntil !== "string" || validUntil >= today;
+      })
+      .map((row) => {
+        const r = row as Record<string, unknown>;
+        return {
+          kind: String(r.kind),
+          title: String(r.title),
+          identifier: text(r.identifier),
+          issuer: text(r.issuer),
+        };
+      });
   }
-  return null;
 }
 
-function parseFactors(value: unknown): PriceFactorDto[] {
-  if (!Array.isArray(value)) return [];
-
-  return value.flatMap((entry) => {
-    if (!entry || typeof entry !== "object") return [];
-    const e = entry as Record<string, unknown>;
-    if (typeof e.factor !== "string") return [];
-
-    const effect = e.effect === "up" || e.effect === "down" ? e.effect : "varies";
-    return [
-      {
-        factor: e.factor,
-        effect,
-        ...(typeof e.detail === "string" ? { detail: e.detail } : {}),
-      },
-    ];
-  });
+function text(value: unknown): string | null {
+  return typeof value === "string" && value.trim() !== "" ? value : null;
 }

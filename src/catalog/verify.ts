@@ -61,6 +61,9 @@ export async function probeDataEndpoint(url: string): Promise<ProbeResult> {
       const data = (body as Record<string, unknown>).data;
       if (Array.isArray(data)) count = data.length;
       else if (data && typeof data === "object") count = 1;
+      // An explicit null is an empty single-object endpoint. Leaving count at
+      // null would read as "couldn't tell" and let the entry through.
+      else if (data === null) count = 0;
     }
 
     return { url, ok: true, status, count, error: null };

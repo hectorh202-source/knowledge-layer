@@ -8,10 +8,10 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit",
     "export": "tsx src/export/run.ts",
-    "analyze": "tsx src/analysis/run.ts",
     "load": "tsx src/db/load.ts",
     "api": "tsx src/api/server.ts",
-    "catalog": "tsx src/catalog/run.ts"
+    "catalog": "tsx src/catalog/run.ts",
+    "content:load": "tsx src/db/load-content.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",

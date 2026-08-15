@@ -1,111 +1,96 @@
-import * as fs from "fs";
-import * as path from "path";
-import { latestRunDir, loadDataset } from "../../analysis/normalize";
-import { buildRevenueReport } from "../../analysis/revenue";
+import { latestRunDir, loadDataset } from "../../data/normalize";
+import { loadProfile, validateProfile } from "../../data/profile";
+import type { Dataset } from "../../data/types";
 import type {
+  BrandDto,
   BusinessDto,
+  CredentialDto,
   FaqDto,
   KnowledgeSource,
-  PricingDto,
   ServiceAreaDto,
   ServiceDto,
   SourceOptions,
 } from "../types";
 
 /**
- * Serves the API from the latest export on disk instead of Supabase.
+ * Serves the API from local files instead of Supabase.
  *
- * This exists so the API is runnable before a Supabase project exists. It reads
- * the same files the loader reads, so what you see here is what would land in
- * the database.
+ * Derived data comes from the latest export; the business profile comes from
+ * content/business-profile.json. This exists so the API runs before a Supabase
+ * project does — an API nobody can run is an API nobody reviews.
  *
- * The important thing it CANNOT do: serve authored content. Pricing factors,
- * FAQs, policies, and credentials live only in the database because they're
- * written by a person, not derived from an export. So `/v1/faqs` is empty here
- * and `/v1/pricing` returns nothing unless --include-unreviewed is set.
- *
- * That emptiness is accurate, not a bug. It's the shape of the real bottleneck:
- * the pipeline is finished and the content isn't.
+ * What it cannot serve: FAQs, credentials, and service write-ups, which live
+ * only in the database because they're authored through their own path. Those
+ * being empty here is accurate rather than a gap.
  */
 export class FileSource implements KnowledgeSource {
   readonly kind = "files" as const;
   readonly tenant: string;
 
-  private dir: string;
+  private dataset: Dataset;
   private includeUnreviewed: boolean;
 
   constructor(options: SourceOptions, dir?: string) {
     this.tenant = options.tenant;
     this.includeUnreviewed = options.includeUnreviewed;
-    this.dir = dir ?? latestRunDir();
+    this.dataset = loadDataset(dir ?? latestRunDir());
   }
 
-  private readRaw(name: string): Record<string, unknown>[] {
-    const file = path.join(this.dir, `${name}.json`);
-    if (!fs.existsSync(file)) return [];
-    const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
-    return Array.isArray(parsed) ? parsed : [];
-  }
+  async business(): Promise<BusinessDto | null> {
+    const profile = loadProfile();
+    if (!profile) return null;
 
-  async business(): Promise<BusinessDto> {
-    const [areas, services] = await Promise.all([this.serviceAreas(), this.services()]);
+    // A profile missing its name, phone, or city can't identify a business.
+    // Serving it would put an unresolvable entity in front of a crawler.
+    const validation = validateProfile(profile);
+    if (validation.blocking.length > 0 && !this.includeUnreviewed) return null;
+
     return {
-      name: this.tenant,
-      domain: null,
-      serviceAreaCount: areas.length,
-      serviceCount: services.length,
+      name: profile.name,
+      legalName: profile.legalName,
+      description: profile.description,
+      phone: profile.phone,
+      email: profile.email,
+      domain: profile.domain,
+      address: profile.address,
+      gbpUrl: profile.gbpUrl,
+      foundedYear: profile.foundedYear,
+      responseTime: profile.responseTime,
+      emergencyService: profile.emergencyService,
+      hours: profile.hours,
+      serviceCount: this.dataset.services.filter((s) => s.isActive).length,
+      serviceAreaCount: this.dataset.serviceAreas.filter((a) => a.isActive).length,
     };
   }
 
   async services(): Promise<ServiceDto[]> {
-    const categories = new Map(
-      this.readRaw("pricebook-categories").map((row) => [String(row.id), String(row.name ?? "")])
-    );
-
-    return this.readRaw("pricebook-services")
-      .filter((row) => row.active !== false)
-      .map((row) => ({
-        name: String(row.displayName ?? "Unnamed service"),
-        category: categories.get(String(row.categoryId)) ?? null,
-        description: typeof row.description === "string" ? row.description : null,
+    return this.dataset.services
+      .filter((service) => service.isActive)
+      .map((service) => ({
+        name: service.name,
+        category: service.category,
+        description: service.description,
       }));
   }
 
   async serviceAreas(): Promise<ServiceAreaDto[]> {
-    return this.readRaw("zones")
-      .filter((row) => row.active !== false)
-      .map((row) => ({
-        name: String(row.name ?? "Unnamed area"),
-        zips: Array.isArray(row.zips) ? row.zips.map(String) : [],
-        cities: Array.isArray(row.cities) ? row.cities.map(String) : [],
-      }));
+    return this.dataset.serviceAreas
+      .filter((area) => area.isActive)
+      .map((area) => ({ name: area.name, zips: area.zips, cities: area.cities }));
   }
 
-  async pricing(): Promise<PricingDto[]> {
-    // No authored content on disk, so every range here is unreviewed by
-    // definition. Serving these publicly would put unvetted statistics in front
-    // of an AI, including the thin samples the analysis step flagged.
-    if (!this.includeUnreviewed) return [];
-
-    const report = buildRevenueReport(loadDataset(this.dir));
-
-    return report.byRevenue
-      .filter((row) => !row.thinSample)
-      .map((row) => ({
-        service: row.jobTypeName,
-        currency: "USD" as const,
-        low: row.publishRange.low,
-        high: row.publishRange.high,
-        unit: "job" as const,
-        factors: [],
-        included: [],
-        excluded: [],
-        reviewedAt: null,
-      }));
+  async brands(): Promise<BrandDto[]> {
+    return this.dataset.brands
+      .filter((brand) => brand.isActive)
+      .map((brand) => ({ name: brand.name }));
   }
 
   async faqs(): Promise<FaqDto[]> {
-    // Authored only. There is nothing to read from an export.
+    // Authored only. Nothing to read from an export.
+    return [];
+  }
+
+  async credentials(): Promise<CredentialDto[]> {
     return [];
   }
 }

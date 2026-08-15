@@ -101,7 +101,10 @@ function main(): void {
           data,
           meta: {
             tenant: source.tenant,
-            count: Array.isArray(data) ? data.length : 1,
+            // A null single-object response is empty, not a count of one.
+            // Reporting 1 here would let the catalog advertise an endpoint
+            // that returns nothing.
+            count: Array.isArray(data) ? data.length : data ? 1 : 0,
             generatedAt: new Date().toISOString(),
             source: source.kind,
           },

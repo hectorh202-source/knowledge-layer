@@ -26,13 +26,8 @@ import {
  * dollar amount to a job type.
  */
 
-const HOURS_MS = 60 * 60 * 1000;
-
 export interface MockOptions {
   seed: number;
-  historyMonths: number;
-  /** Roughly how many completed jobs to generate over the window. */
-  jobCount: number;
 }
 
 interface Ids {
@@ -180,93 +175,6 @@ function genZones(): unknown[] {
   }));
 }
 
-/**
- * Jobs and invoices are generated together so they stay consistent, then split
- * into two files. Generating them independently would produce invoices that
- * reference jobs that don't exist, which would hide join bugs rather than
- * expose them.
- */
-function genJobsAndInvoices(
-  rand: Rand,
-  ids: Ids,
-  options: MockOptions
-): { jobs: unknown[]; invoices: unknown[] } {
-  const end = new Date();
-  const start = new Date();
-  start.setMonth(start.getMonth() - options.historyMonths);
-
-  const weights = JOB_TYPES.map((t) => t.weight);
-  const jobs: unknown[] = [];
-  const invoices: unknown[] = [];
-
-  for (let i = 0; i < options.jobCount; i++) {
-    const type = JOB_TYPES[rand.weightedIndex(weights)];
-    const jobId = 100000 + i;
-    const jobNumber = String(200000 + i);
-    const completedOn = rand.dateBetween(start, end);
-    const businessUnitId = ids.businessUnits.get(type.businessUnit)!;
-    const zone = rand.pick(ZONES);
-
-    jobs.push({
-      id: jobId,
-      jobNumber,
-      projectId: null,
-      customerId: 50000 + rand.int(1, 3200),
-      locationId: 60000 + rand.int(1, 3200),
-      jobStatus: "Completed",
-      completedOn,
-      businessUnitId,
-      jobTypeId: ids.jobTypes.get(type.name),
-      priority: rand.pick(["Low", "Normal", "High", "Urgent"]),
-      campaignId: 8000 + rand.int(0, 6),
-      summary: `${type.name} — ${zone.name}`,
-      // Source attribution matters later for Layer 5. Kept realistic-ish so the
-      // measurement work has something to group by.
-      customFields: [{ name: "Lead Source", value: rand.pick(["Google", "Repeat", "Referral", "GBP", "Yelp", "AI Assistant"]) }],
-      createdOn: new Date(new Date(completedOn).getTime() - rand.int(2, 96) * HOURS_MS).toISOString(),
-      modifiedOn: completedOn,
-    });
-
-    // Not every completed job produces an invoice in the window — warranty
-    // callbacks and re-dos exist. ~4% gap keeps the join honest.
-    if (rand.bool(0.96)) {
-      const total = rand.money(rand.skewed(type.priceMin, type.priceMax));
-      const salesTax = Math.round(total * 0.07 * 100) / 100;
-
-      invoices.push({
-        id: 300000 + i,
-        syncStatus: "Posted",
-        referenceNumber: `INV-${jobNumber}`,
-        invoiceDate: completedOn,
-        dueDate: new Date(new Date(completedOn).getTime() + 30 * 24 * HOURS_MS).toISOString(),
-        subTotal: total,
-        salesTax,
-        total: Math.round((total + salesTax) * 100) / 100,
-        balance: rand.bool(0.92) ? 0 : total,
-        customerId: 50000 + rand.int(1, 3200),
-        locationId: 60000 + rand.int(1, 3200),
-        businessUnit: { id: businessUnitId, name: type.businessUnit },
-        // The join the analysis step depends on.
-        job: { id: jobId, number: jobNumber, type: type.name },
-        items: [
-          {
-            id: 400000 + i,
-            description: type.name,
-            quantity: 1,
-            cost: rand.money(total * rand.float(0.28, 0.46)),
-            totalCost: total,
-            type: "Service",
-          },
-        ],
-        createdOn: completedOn,
-        modifiedOn: completedOn,
-      });
-    }
-  }
-
-  return { jobs, invoices };
-}
-
 // --- entry point -----------------------------------------------------------
 
 /**
@@ -274,10 +182,6 @@ function genJobsAndInvoices(
  * has no mock implementation yet.
  */
 export function generateMockRecords(target: string, options: MockOptions): unknown[] | null {
-  // A fresh RNG per call, seeded identically. This is what keeps "jobs-completed"
-  // and "invoices" consistent across two separate calls — both replay the same
-  // sequence and land on the same job ids and totals. Reordering the random
-  // draws inside genJobsAndInvoices would silently break that join.
   const rand = new Rand(makeRng(options.seed));
   const ids = buildIds();
 
@@ -300,10 +204,6 @@ export function generateMockRecords(target: string, options: MockOptions): unkno
       return genTechnicians(rand, ids);
     case "zones":
       return genZones();
-    case "jobs-completed":
-      return genJobsAndInvoices(rand, ids, options).jobs;
-    case "invoices":
-      return genJobsAndInvoices(rand, ids, options).invoices;
     default:
       return null;
   }

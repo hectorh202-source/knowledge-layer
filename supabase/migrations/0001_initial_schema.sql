@@ -1,18 +1,22 @@
 -- Knowledge Layer — initial schema
 --
+-- The purpose of this database is to make a business legible to AI: to let an
+-- answer engine resolve who it is, what it does, where it works, and what the
+-- answers are to the questions people actually ask.
+--
 -- Two kinds of table live here, and the distinction is the whole design:
 --
 --   DERIVED  — owned by the loader. Re-synced from ServiceTitan on every run.
 --              Safe to overwrite. Never hand-edit; your edits will be lost.
 --
---   AUTHORED — owned by a human. Pricing factors, FAQs, policies, credentials.
---              The loader must never write to these tables. This is months of
---              editorial work and it is the actual product.
+--   AUTHORED — owned by a human. The business profile, hours, FAQs, policies,
+--              credentials, service write-ups. This is the actual product and
+--              the loader must never write to it.
 --
--- Human annotations on a derived thing (say, the editorial content for a
--- service) live in a companion AUTHORED table joined by foreign key, rather
--- than as extra columns on the derived row. That way "re-sync services" can
--- never mean "delete the pricing guide someone spent a week writing."
+-- Human annotations on a derived thing live in a companion AUTHORED table
+-- joined by foreign key, rather than as extra columns on the derived row. That
+-- way "re-sync services" can never mean "delete the write-up someone spent a
+-- week on."
 --
 -- Derived rows are soft-deleted (is_active = false) rather than removed, so
 -- authored content never orphans when ServiceTitan stops returning a record.
@@ -24,13 +28,12 @@ create extension if not exists "pgcrypto";
 -- ---------------------------------------------------------------------------
 
 -- tenant_id is here from day one even though TitanZ is the only tenant.
--- Adding it later means rewriting every foreign key, every index, and every
--- RLS policy. Adding it now costs one column. See OPEN-QUESTIONS.md 5.1.
+-- Adding it later means rewriting every foreign key, index, and RLS policy.
+-- Adding it now costs one column. See OPEN-QUESTIONS.md 5.1.
 create table tenants (
   id          uuid primary key default gen_random_uuid(),
   slug        text not null unique,
   name        text not null,
-  domain      text,
   crm         text not null default 'servicetitan',
   created_at  timestamptz not null default now(),
   updated_at  timestamptz not null default now()
@@ -38,8 +41,7 @@ create table tenants (
 
 comment on table tenants is 'One row per business. TitanZ is tenant #1.';
 
--- Provenance. Every derived row can be traced to the export run that produced
--- it, which is what makes "why does the site say $1,400?" answerable.
+-- Provenance. Every derived row traces to the export run that produced it.
 create table sync_runs (
   id             uuid primary key default gen_random_uuid(),
   tenant_id      uuid not null references tenants(id) on delete cascade,
@@ -56,6 +58,65 @@ create index sync_runs_tenant_idx on sync_runs (tenant_id, started_at desc);
 
 comment on column sync_runs.is_mock is
   'True when loaded from generated data. Nothing published should ever trace to a mock run.';
+
+-- ---------------------------------------------------------------------------
+-- AUTHORED — the entity foundation
+--
+-- Everything else depends on these. An answer engine that cannot resolve this
+-- business as a distinct entity cannot recommend it, however good the rest of
+-- the content is.
+-- ---------------------------------------------------------------------------
+
+create table business_profile (
+  tenant_id         uuid primary key references tenants(id) on delete cascade,
+
+  name              text not null,
+  legal_name        text,
+  description       text,
+
+  -- The canonical NAP number. Must match the Google Business Profile and every
+  -- directory listing character for character. Tracking numbers belong on
+  -- AI-specific landing pages, never here — an inconsistent NAP actively
+  -- degrades entity resolution.
+  phone             text,
+  email             text,
+  domain            text,
+
+  street            text,
+  city              text,
+  region            text,
+  postal_code       text,
+  country           text not null default 'US',
+
+  -- The strongest corroboration signal available. AI weights agreement across
+  -- independent sources, and GBP is the one that matters most locally.
+  gbp_url           text,
+
+  founded_year      integer,
+  -- A citable specific, e.g. "within 2 hours for emergencies".
+  response_time     text,
+  emergency_service boolean not null default false,
+
+  is_published      boolean not null default false,
+  reviewed_at       timestamptz,
+  reviewed_by       text,
+  created_at        timestamptz not null default now(),
+  updated_at        timestamptz not null default now()
+);
+
+create table business_hours (
+  id           uuid primary key default gen_random_uuid(),
+  tenant_id    uuid not null references tenants(id) on delete cascade,
+  -- 0 = Sunday.
+  day_of_week  integer not null check (day_of_week between 0 and 6),
+  opens        time,
+  closes       time,
+  is_closed    boolean not null default false,
+  unique (tenant_id, day_of_week)
+);
+
+comment on table business_hours is
+  'Structured for schema.org openingHoursSpecification. "Call for hours" is not citable.';
 
 -- ---------------------------------------------------------------------------
 -- DERIVED — loader owns these
@@ -79,14 +140,13 @@ create table job_types (
   source         text not null default 'servicetitan',
   source_id      text not null,
   name           text not null,
-  class          text,
   is_active      boolean not null default true,
   last_synced_at timestamptz not null default now(),
   unique (tenant_id, source, source_id)
 );
 
 comment on table job_types is
-  'What gets booked. Distinct from services, which is what gets sold on an invoice.';
+  'What gets booked. Distinct from services, which is what gets sold.';
 
 create table services (
   id               uuid primary key default gen_random_uuid(),
@@ -97,7 +157,6 @@ create table services (
   display_name     text not null,
   description      text,
   category         text,
-  list_price       numeric(12,2),
   business_unit_id uuid references business_units(id) on delete set null,
   is_active        boolean not null default true,
   last_synced_at   timestamptz not null default now(),
@@ -118,7 +177,7 @@ create table service_areas (
 );
 
 comment on column service_areas.zips is
-  'Real geography. "Port Charlotte and surrounding areas" is not machine-readable.';
+  'Real postal codes. "Port Charlotte and surrounding areas" is not something an AI can match a ZIP against.';
 
 create table brands (
   id             uuid primary key default gen_random_uuid(),
@@ -131,84 +190,39 @@ create table brands (
   unique (tenant_id, source, source_id)
 );
 
--- Price statistics are append-only rather than upserted. Keeping every run
--- means you can see pricing drift over time, which is what turns a stale
--- catalog from an invisible problem into a visible one. See 4.2.
-create table price_stats (
+comment on table brands is
+  'Equipment serviced. Answers "do you work on X" — a high-volume query shape.';
+
+-- ---------------------------------------------------------------------------
+-- AUTHORED — content
+-- ---------------------------------------------------------------------------
+
+create table service_content (
   id            uuid primary key default gen_random_uuid(),
   tenant_id     uuid not null references tenants(id) on delete cascade,
-  job_type_id   uuid not null references job_types(id) on delete cascade,
-  sync_run_id   uuid references sync_runs(id) on delete set null,
+  job_type_id   uuid references job_types(id) on delete set null,
 
-  window_months integer not null,
-  invoice_count integer not null,
-  job_count     integer not null,
-  revenue_total numeric(14,2) not null,
-  revenue_share numeric(6,5) not null,
+  slug          text not null,
+  headline      text not null,
+  summary       text,
 
-  amount_min    numeric(12,2) not null,
-  p10           numeric(12,2) not null,
-  p25           numeric(12,2) not null,
-  median        numeric(12,2) not null,
-  p75           numeric(12,2) not null,
-  p90           numeric(12,2) not null,
-  amount_max    numeric(12,2) not null,
-  mean          numeric(12,2) not null,
+  -- Concrete, citable statements about this service. Specificity is what gets
+  -- quoted; generic marketing copy is what gets skipped.
+  key_points    text[] not null default '{}',
+  included      text[] not null default '{}',
+  excluded      text[] not null default '{}',
 
-  -- The range that would actually go on a pricing page: p10-p90, rounded out.
-  publish_low   numeric(12,2) not null,
-  publish_high  numeric(12,2) not null,
-  -- True when the sample is too small for the range to mean anything.
-  thin_sample   boolean not null default false,
-
-  computed_at   timestamptz not null default now()
-);
-
-create index price_stats_lookup_idx on price_stats (tenant_id, job_type_id, computed_at desc);
-
--- Most recent stats per job type, which is what everything downstream wants.
-create view latest_price_stats as
-select distinct on (tenant_id, job_type_id) *
-from price_stats
-order by tenant_id, job_type_id, computed_at desc;
-
--- ---------------------------------------------------------------------------
--- AUTHORED — the loader must never write to anything below this line
--- ---------------------------------------------------------------------------
-
--- The editorial layer for one service. This is the asset: a published range
--- alone is a price tag, while the factors behind it are expertise.
-create table service_content (
-  id               uuid primary key default gen_random_uuid(),
-  tenant_id        uuid not null references tenants(id) on delete cascade,
-  job_type_id      uuid references job_types(id) on delete set null,
-
-  slug             text not null,
-  headline         text not null,
-  summary          text,
-
-  -- [{ "factor": "Tank size 40 vs 75 gal", "effect": "up", "detail": "..." }]
-  -- What moves the price. Without this a range is indefensible on the phone
-  -- and uncitable by an AI.
-  price_factors    jsonb not null default '[]'::jsonb,
-
-  included         text[] not null default '{}',
-  excluded         text[] not null default '{}',
-
-  -- Overrides the computed range when a human decides the stats are wrong or
-  -- the sample is thin. Null means "use latest_price_stats".
-  override_low     numeric(12,2),
-  override_high    numeric(12,2),
-  override_reason  text,
-
-  is_published     boolean not null default false,
-  reviewed_at      timestamptz,
-  reviewed_by      text,
-  created_at       timestamptz not null default now(),
-  updated_at       timestamptz not null default now(),
+  is_published  boolean not null default false,
+  reviewed_at   timestamptz,
+  reviewed_by   text,
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now(),
   unique (tenant_id, slug)
 );
 
+-- Question and answer is the citation mechanism. An answer engine matches a
+-- user's question to an answer, so this table is the highest-leverage content
+-- in the schema.
 create table faqs (
   id           uuid primary key default gen_random_uuid(),
   tenant_id    uuid not null references tenants(id) on delete cascade,
@@ -217,12 +231,11 @@ create table faqs (
   question     text not null,
   answer       text not null,
 
-  -- Where the question came from. Call transcripts are the best source:
-  -- real questions in customers' own words. See 4.4.
+  -- Call transcripts are the best source: real questions in customers' own
+  -- words rather than what someone imagines customers ask. See 4.4.
   origin       text not null default 'manual'
                check (origin in ('manual', 'call_transcript', 'gbp', 'website', 'crm')),
-  -- Generated candidates stay unapproved until a human signs off. Nothing
-  -- unapproved is ever published.
+  -- Generated candidates stay unapproved until a human signs off.
   is_approved  boolean not null default false,
   is_published boolean not null default false,
   sort_order   integer not null default 0,
@@ -255,7 +268,7 @@ create table credentials (
   identifier   text,
   issuer       text,
   issued_on    date,
-  -- A lapsed license published as current is the worst possible stale record.
+  -- A lapsed license published as current is the worst kind of stale record.
   valid_until  date,
   is_published boolean not null default false,
   created_at   timestamptz not null default now(),
@@ -278,6 +291,8 @@ $$;
 
 create trigger tenants_updated_at before update on tenants
   for each row execute function set_updated_at();
+create trigger business_profile_updated_at before update on business_profile
+  for each row execute function set_updated_at();
 create trigger service_content_updated_at before update on service_content
   for each row execute function set_updated_at();
 create trigger faqs_updated_at before update on faqs
@@ -290,26 +305,30 @@ create trigger credentials_updated_at before update on credentials
 -- ---------------------------------------------------------------------------
 -- Row level security
 --
--- Enabled everywhere now so that adding tenant #2 is a policy change rather
--- than a security incident. The loader uses the service role key and bypasses
--- RLS entirely; these policies govern the public API layer built later.
+-- Enabled everywhere now so adding tenant #2 is a policy change rather than a
+-- security incident. The loader uses the service role key and bypasses RLS;
+-- these policies govern the public API.
 -- ---------------------------------------------------------------------------
 
 alter table tenants          enable row level security;
 alter table sync_runs        enable row level security;
+alter table business_profile enable row level security;
+alter table business_hours   enable row level security;
 alter table business_units   enable row level security;
 alter table job_types        enable row level security;
 alter table services         enable row level security;
 alter table service_areas    enable row level security;
 alter table brands           enable row level security;
-alter table price_stats      enable row level security;
 alter table service_content  enable row level security;
 alter table faqs             enable row level security;
 alter table policies         enable row level security;
 alter table credentials      enable row level security;
 
--- Anonymous read access to published content only. This is what the public
--- API and the AI catalog will serve. Unpublished drafts stay invisible.
+-- Anonymous read access to published, active content only.
+create policy public_read_business_profile on business_profile
+  for select using (is_published = true);
+create policy public_read_business_hours on business_hours
+  for select using (true);
 create policy public_read_services on services
   for select using (is_active = true);
 create policy public_read_service_areas on service_areas
@@ -318,8 +337,6 @@ create policy public_read_job_types on job_types
   for select using (is_active = true);
 create policy public_read_brands on brands
   for select using (is_active = true);
-create policy public_read_price_stats on price_stats
-  for select using (true);
 create policy public_read_service_content on service_content
   for select using (is_published = true);
 create policy public_read_faqs on faqs

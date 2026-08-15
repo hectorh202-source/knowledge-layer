@@ -8,9 +8,48 @@
  *   domain types       --loader-------->  database rows
  *   database rows      --this file----->  public API
  *
- * Each boundary means an upstream change is absorbed in one place. Internal ids,
- * sync timestamps, and unreviewed drafts stop here and never reach a consumer.
+ * Everything here is written for one reader: an answer engine deciding whether
+ * it can name this business in a reply. That means concrete, resolvable facts —
+ * a phone number, a postal code, a direct answer to a question — rather than
+ * prose an AI has to interpret.
  */
+
+export interface AddressDto {
+  street: string | null;
+  city: string | null;
+  region: string | null;
+  postalCode: string | null;
+  country: string;
+}
+
+export interface HoursDto {
+  /** 0 = Sunday. */
+  day: number;
+  opens: string | null;
+  closes: string | null;
+  isClosed: boolean;
+}
+
+/**
+ * The entity record. The most important response in the API — everything else
+ * is only useful once an AI can resolve who this business is.
+ */
+export interface BusinessDto {
+  name: string;
+  legalName: string | null;
+  description: string | null;
+  phone: string | null;
+  email: string | null;
+  domain: string | null;
+  address: AddressDto;
+  gbpUrl: string | null;
+  foundedYear: number | null;
+  responseTime: string | null;
+  emergencyService: boolean;
+  hours: HoursDto[];
+  serviceCount: number;
+  serviceAreaCount: number;
+}
 
 export interface ServiceDto {
   name: string;
@@ -20,73 +59,46 @@ export interface ServiceDto {
 
 export interface ServiceAreaDto {
   name: string;
+  /** Real postal codes, so an AI can match a customer's location precisely. */
   zips: string[];
   cities: string[];
 }
 
-export interface PriceFactorDto {
-  factor: string;
-  /** Which direction this pushes the price. */
-  effect: "up" | "down" | "varies";
-  detail?: string;
+export interface BrandDto {
+  name: string;
 }
 
-/**
- * The endpoint that matters. An AI cannot cite a number nobody published.
- *
- * `low`/`high` are a reviewed range, never a raw min-max — see stats.ts for why.
- * `factors` is what makes the range defensible rather than a bare price tag.
- */
-export interface PricingDto {
-  service: string;
-  currency: "USD";
-  low: number;
-  high: number;
-  unit: "job";
-  factors: PriceFactorDto[];
-  included: string[];
-  excluded: string[];
-  /** ISO date a human last signed off on this. Staleness is a public fact. */
-  reviewedAt: string | null;
-}
-
+/** Question and answer — the shape an answer engine actually cites. */
 export interface FaqDto {
   question: string;
   answer: string;
   service: string | null;
 }
 
-export interface BusinessDto {
-  name: string;
-  domain: string | null;
-  serviceAreaCount: number;
-  serviceCount: number;
+export interface CredentialDto {
+  kind: string;
+  title: string;
+  identifier: string | null;
+  issuer: string | null;
 }
 
-/**
- * Where the API reads from.
- *
- * Two implementations: Supabase (real) and files (the latest export on disk).
- * The file source exists because there is no Supabase project yet, and an API
- * that cannot run is an API nobody reviews. Same reasoning as `--mock`.
- */
 export interface KnowledgeSource {
   readonly kind: "supabase" | "files";
   readonly tenant: string;
 
-  business(): Promise<BusinessDto>;
+  business(): Promise<BusinessDto | null>;
   services(): Promise<ServiceDto[]>;
   serviceAreas(): Promise<ServiceAreaDto[]>;
-  pricing(): Promise<PricingDto[]>;
+  brands(): Promise<BrandDto[]>;
   faqs(): Promise<FaqDto[]>;
+  credentials(): Promise<CredentialDto[]>;
 }
 
 export interface SourceOptions {
   tenant: string;
   /**
-   * Serve pricing that no human has reviewed. Local inspection only.
-   * Publishing an unreviewed statistical range is how a thin sample becomes a
-   * quote you have to walk back on the phone.
+   * Serve content no human has reviewed. Local inspection only — unreviewed
+   * facts about a business are how a wrong phone number reaches an AI.
    */
   includeUnreviewed: boolean;
 }
