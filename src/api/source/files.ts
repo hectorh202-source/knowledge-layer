@@ -1,3 +1,4 @@
+import { isCurrent, loadCredentials, loadFaqs } from "../../data/content";
 import { latestRunDir, loadDataset } from "../../data/normalize";
 import { loadProfile, validateProfile } from "../../data/profile";
 import type { Dataset } from "../../data/types";
@@ -85,12 +86,29 @@ export class FileSource implements KnowledgeSource {
       .map((brand) => ({ name: brand.name }));
   }
 
+  /**
+   * Approved and published only — the same gate the database applies.
+   *
+   * An extracted answer is a promise made on the company's behalf, so serving
+   * anything unapproved would put words in their mouth in front of an AI.
+   */
   async faqs(): Promise<FaqDto[]> {
-    // Authored only. Nothing to read from an export.
-    return [];
+    return loadFaqs()
+      .filter((faq) => faq.approved && (faq.published || this.includeUnreviewed))
+      .map((faq) => ({ question: faq.question, answer: faq.answer, service: null }));
   }
 
   async credentials(): Promise<CredentialDto[]> {
-    return [];
+    return loadCredentials()
+      .filter((c) => c.approved && (c.published || this.includeUnreviewed))
+      // A lapsed license published as current is a claim about compliance that
+      // stopped being true.
+      .filter(isCurrent)
+      .map((c) => ({
+        kind: c.kind,
+        title: c.title,
+        identifier: c.identifier,
+        issuer: c.issuer,
+      }));
   }
 }

@@ -14,3 +14,8 @@ data/
 # Intake output — extracted candidates from customer sites.
 # Unreviewed third-party content; not committed.
 content/intake/
+
+# Authored content — real business data, filled per-customer.
+content/faqs.json
+content/credentials.json
+content/business-profile.json

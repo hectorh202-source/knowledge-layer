@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { getSupabase, tenantSlug } from "./client";
+import { loadCredentials, loadFaqs } from "../data/content";
 import { loadProfile, profileExists, validateProfile } from "../data/profile";
 
 /**
@@ -121,7 +122,44 @@ async function main(): Promise<void> {
     if (hoursError) throw new Error(`Writing business hours failed: ${hoursError.message}`);
   }
 
-  console.log(`  Business profile and ${profile.hours.length} day(s) of hours written.\n`);
+  // --- FAQs and credentials ------------------------------------------------
+  // Only approved entries are written at all. Unapproved candidates stay in
+  // the content files where a human can see them, rather than sitting in the
+  // database one flag away from being served.
+  const approvedFaqs = loadFaqs().filter((faq) => faq.approved);
+  if (approvedFaqs.length > 0) {
+    const { error } = await supabase.from("faqs").upsert(
+      approvedFaqs.map((faq, index) => ({
+        tenant_id: tenantId,
+        question: faq.question,
+        answer: faq.answer,
+        origin: faq.provenance?.source === "website" ? "website" : "manual",
+        is_approved: true,
+        is_published: faq.published,
+        sort_order: index,
+      }))
+    );
+    if (error) throw new Error(`Writing FAQs failed: ${error.message}`);
+  }
+
+  const approvedCredentials = loadCredentials().filter((c) => c.approved);
+  if (approvedCredentials.length > 0) {
+    const { error } = await supabase.from("credentials").upsert(
+      approvedCredentials.map((c) => ({
+        tenant_id: tenantId,
+        kind: c.kind,
+        title: c.title,
+        identifier: c.identifier,
+        issuer: c.issuer,
+        valid_until: c.validUntil,
+        is_published: c.published,
+      }))
+    );
+    if (error) throw new Error(`Writing credentials failed: ${error.message}`);
+  }
+
+  console.log(`  Business profile and ${profile.hours.length} day(s) of hours written.`);
+  console.log(`  ${approvedFaqs.length} approved FAQ(s), ${approvedCredentials.length} approved credential(s).\n`);
 
   if (!publish) {
     console.log(`  Loaded as a draft. The API will not serve it until published.`);
