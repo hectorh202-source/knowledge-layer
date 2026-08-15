@@ -8,9 +8,11 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit",
     "export": "tsx src/export/run.ts",
-    "analyze": "tsx src/analysis/run.ts"
+    "analyze": "tsx src/analysis/run.ts",
+    "load": "tsx src/db/load.ts"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.112.3",
     "axios": "^1.7.9",
     "dotenv": "^16.4.7"
   },

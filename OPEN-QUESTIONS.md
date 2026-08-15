@@ -217,6 +217,26 @@ MCP is mostly a wrapper over the API — days, not weeks, once the API exists, a
 to users today. A2A is real protocol with the least evidence behind it; stub the catalog entry and
 build when a registry is actually sending queries.
 
+### 5.4 How do migrations actually get applied?
+**Status:** OPEN — no Supabase project exists yet
+`supabase/migrations/0001_initial_schema.sql` can be pasted into the Supabase SQL editor to start,
+but that doesn't version-track what's been applied. The Supabase CLI does, and matters more once
+there's a second environment or a second tenant.
+**Blocks:** Running the loader for real. Not the build — `--dry-run` works without a database.
+
+### 5.5 `price_stats` is append-only and grows forever
+**Status:** OPEN — intentional for now
+Every analysis run inserts a row per job type, which is what makes pricing drift visible over time
+(4.2). At ~18 rows per run it's harmless for years; at 200 tenants syncing nightly it isn't.
+**Decide later:** retention window, or roll up to monthly after N months.
+
+### 5.6 Who decides when a computed price range gets overridden?
+**Status:** OPEN
+`service_content` has `override_low` / `override_high` / `override_reason` for when the statistics
+are wrong or the sample is thin. That's a judgment call with no owner assigned.
+**Why it matters:** an override with no reason recorded is indistinguishable from a typo six months
+later. The column exists; the process doesn't.
+
 ### 5.3 How are per-tenant CRM credentials stored?
 **Status:** DEFERRED until multi-tenant
 You'd be holding OAuth tokens that can write jobs into other companies' dispatch boards — the largest
@@ -452,6 +472,21 @@ rather than after.
 - **The export answers two open questions empirically.** 4.1 (highest-revenue service) becomes a
   computed number rather than someone's estimate. 4.3 (pricing ranges) becomes a real distribution
   per job type.
+- **The schema splits DERIVED from AUTHORED tables**, and the loader is only permitted to write the
+  derived ones. Services, job types, service areas, brands, and price stats re-sync from
+  ServiceTitan. Pricing factors, FAQs, policies, and credentials are human-owned and the loader
+  raises if it ever tries to touch them. Human annotations on a derived thing live in a companion
+  authored table joined by FK, never as extra columns on a derived row — so "re-sync services" can
+  never mean "delete the pricing guide someone spent a week writing."
+- **Derived rows are soft-deleted** (`is_active = false`), never removed, so authored content
+  joined to them can't orphan when ServiceTitan stops returning a record.
+- **`tenant_id` is in the schema from day one** despite TitanZ being the only tenant. Adding it later
+  means rewriting every foreign key, index, and RLS policy. Adding it now cost one column.
+- **RLS is enabled on every table now**, so tenant #2 is a policy change rather than a security
+  incident. The loader uses the service role key and bypasses it; the public API layer must use the
+  anon key so the policies actually apply.
+- **`price_stats` is append-only**, one row per job type per run, so pricing drift over time is
+  visible rather than silently overwritten.
 - **What the export won't give you:** the factors that move a price up or down, FAQs, warranty and
   permit policies, credentials, brands serviced. ServiceTitan has the *what*, not the *why*. Those
   still need a human — but they're far easier to write while annotating a real service list than
