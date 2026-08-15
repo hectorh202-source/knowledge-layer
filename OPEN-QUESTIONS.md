@@ -278,6 +278,43 @@ stale record.
 **Rule already enforced:** the API never serves expired credentials, and nothing extracted is
 approved automatically. Someone has to verify these against the state license lookup.
 
+### 4.11 The Places API integration is untested against a live call
+**Status:** OPEN — needs a key to verify
+Written against the Places API (New): `POST places:searchText` and `GET places/{id}`, authenticated
+with `X-Goog-Api-Key` and a `X-Goog-FieldMask` header. Endpoint paths, field mask names, and the
+response shape are all from knowledge, not from a real response. The error path (missing key) is
+tested; nothing else is.
+**Most likely to be wrong:** field mask names, `addressComponents` type strings, and the
+`regularOpeningHours.periods` shape.
+**Resolves when:** a `GOOGLE_MAPS_API_KEY` exists and it runs once.
+
+### 4.12 Google restricts caching Places data
+**Status:** ANSWERED — constraint, design around it
+Google's terms permit indefinite storage of `place_id` only. Hours, addresses, and ratings must not
+be cached long-term. That's a real constraint for a product whose whole job is storing and
+republishing business facts.
+**How it's handled:** Places output is an unapproved candidate for the owner to confirm. Once
+confirmed it becomes *their* asserted fact rather than Google's cached data. Places is never a
+source of record, and the note is printed on every run.
+**Also:** review text is deliberately not extracted. Ratings and counts are facts worth noting;
+republishing the reviews themselves is someone else's copyrighted content.
+
+### 4.13 Wrong-business matching is the real risk in Places intake
+**Status:** ANSWERED — mitigated, worth knowing
+Promoting another company's hours and phone number into a customer's profile would be worse than
+having neither. "First search result" is not sufficient evidence.
+**Rule:** a match is only `confident` when the phone number or website domain corroborates it. An
+uncorroborated match is still written out, but flagged loudly and marked low confidence so `best()`
+scoring won't let it outrank website data.
+
+### 4.14 The full GBP API is still unbuilt
+**Status:** OPEN — deliberate
+Places gives public data with no customer involvement. The Google Business Profile API adds Q&A,
+posts, attributes, and service lists, but requires the owner to OAuth in.
+**Why it's worth doing later:** GBP Q&A is real customer questions with the owner's own answers —
+the same value as call transcripts, available to every customer rather than only voice-agent ones.
+**Cost:** an OAuth flow, token storage, and a step in onboarding the customer has to complete.
+
 ### 4.4 What does the intake pipeline pull from?
 **Status:** OPEN — design question, not yet urgent
 Candidate sources: CRM (services, price book, areas, skills), existing website crawl, Google Business

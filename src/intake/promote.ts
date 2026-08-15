@@ -73,6 +73,35 @@ function best<T>(candidates: Candidate<T>[]): { value: T; method: string } | nul
   return ranked[0] ? { value: ranked[0].value, method: ranked[0].method } : null;
 }
 
+/**
+ * Combines several intake runs into one candidate pool.
+ *
+ * Nothing is resolved here — every candidate keeps its own provenance and the
+ * `best()` scoring decides later. Two independent sources landing on the same
+ * phone number is exactly the agreement that should win, and flattening early
+ * would throw that signal away.
+ */
+function mergeIntake(results: IntakeResult[]): IntakeResult {
+  const merged = results[0];
+
+  for (const next of results.slice(1)) {
+    for (const key of Object.keys(merged.entity) as (keyof typeof merged.entity)[]) {
+      // Each field is a homogeneous candidate array; the cast keeps the loop
+      // generic without widening the public types.
+      (merged.entity[key] as unknown[]).push(...(next.entity[key] as unknown[]));
+    }
+
+    merged.faqs.push(...next.faqs);
+    merged.services.push(...next.services);
+    merged.credentials.push(...next.credentials);
+    merged.areas.push(...next.areas);
+    merged.brands.push(...next.brands);
+    merged.pagesFetched.push(...next.pagesFetched);
+  }
+
+  return merged;
+}
+
 function normalizeQuestion(question: string): string {
   return question.toLowerCase().replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, " ").trim();
 }
@@ -88,18 +117,44 @@ async function main(): Promise<void> {
   if (!domain) throw new Error("--domain is required, e.g. --domain calltitanz.com");
 
   const dryRun = argv.includes("--dry-run");
-  const intakeFile = path.join(CONTENT_DIR, "intake", domain, "website.json");
+  const intakeDir = path.join(CONTENT_DIR, "intake", domain);
 
-  if (!fs.existsSync(intakeFile)) {
-    throw new Error(`No intake found at ${intakeFile}. Run: npm run intake -- --site https://${domain}`);
+  if (!fs.existsSync(intakeDir)) {
+    throw new Error(
+      `No intake found at ${intakeDir}. Run: npm run intake -- --site https://${domain}`
+    );
   }
 
-  const result = JSON.parse(fs.readFileSync(intakeFile, "utf8")) as IntakeResult;
+  // Merge every source that has run — website.json, places.json, and whatever
+  // gets added later. Candidates from different sources agreeing on a value is
+  // the strongest corroboration available without asking a human.
+  const sourceFiles = fs
+    .readdirSync(intakeDir)
+    .filter((file) => file.endsWith(".json"))
+    .sort();
+
+  if (sourceFiles.length === 0) {
+    throw new Error(`No intake files in ${intakeDir}.`);
+  }
+
+  const sources = sourceFiles.map((file) => ({
+    file,
+    result: JSON.parse(fs.readFileSync(path.join(intakeDir, file), "utf8")) as IntakeResult,
+  }));
+
+  const result = mergeIntake(sources.map((source) => source.result));
 
   console.log(`\nPromote intake candidates`);
-  console.log(`  domain : ${domain}`);
+  console.log(`  domain  : ${domain}`);
+  console.log(`  sources : ${sourceFiles.join(", ")}`);
   if (dryRun) console.log(`  DRY RUN — nothing will be written`);
   console.log("");
+
+  for (const source of sources) {
+    for (const note of source.result.notes) {
+      console.log(`  ! [${source.file}] ${note}\n`);
+    }
+  }
 
   // --- business profile ----------------------------------------------------
   const profile = JSON.parse(fs.readFileSync(PROFILE_FILE, "utf8")) as Record<string, unknown>;
@@ -150,6 +205,40 @@ async function main(): Promise<void> {
   }
 
   profile.address = address;
+
+  // --- hours ---------------------------------------------------------------
+  // All or nothing, and only when the week is currently unfilled. Merging a
+  // partial week into hand-entered hours would produce a schedule nobody wrote
+  // and nobody checked.
+  const currentHours = Array.isArray(profile.hours) ? profile.hours : [];
+  const hoursAreUnset = currentHours.every((entry) => {
+    const e = (entry ?? {}) as Record<string, unknown>;
+    return e.isClosed === true || isUnset(e.opens) || isUnset(e.closes);
+  });
+
+  const hoursCandidates = result.entity.hours;
+  if (hoursCandidates.length > 0) {
+    if (!hoursAreUnset) {
+      conflicts.push(`hours: kept your existing week, a source also published hours`);
+    } else {
+      const byDay = new Map<number, { day: number; opens: string | null; closes: string | null; isClosed: boolean }>();
+      for (const candidate of hoursCandidates) {
+        if (!byDay.has(candidate.value.day)) byDay.set(candidate.value.day, candidate.value);
+      }
+
+      const week = [...byDay.values()].sort((a, b) => a.day - b.day);
+      if (week.length > 0) {
+        profile.hours = week.map((entry) => ({
+          day: entry.day,
+          isClosed: entry.isClosed,
+          opens: entry.opens,
+          closes: entry.closes,
+        }));
+        const open = week.filter((entry) => !entry.isClosed).length;
+        filled.push(`${"hours".padEnd(14)} ${`${open} open day(s) of 7`.padEnd(46)} ${hoursCandidates[0].provenance.method}`);
+      }
+    }
+  }
 
   if (filled.length > 0) {
     console.log(`  PROFILE — filled ${filled.length} empty field(s)`);

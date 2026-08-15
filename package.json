@@ -13,7 +13,8 @@
     "catalog": "tsx src/catalog/run.ts",
     "content:load": "tsx src/db/load-content.ts",
     "intake": "tsx src/intake/run.ts",
-    "promote": "tsx src/intake/promote.ts"
+    "promote": "tsx src/intake/promote.ts",
+    "intake:places": "tsx src/intake/run-places.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",
