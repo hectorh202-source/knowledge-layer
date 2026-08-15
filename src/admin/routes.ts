@@ -13,6 +13,7 @@ import {
 import { loadProfile, loadProfileRaw, saveProfileRaw, validateProfile } from "../data/profile";
 import { buildJsonLd } from "../jsonld/build";
 import { FileSource } from "../api/source/files";
+import { MANUAL_CHECKS, runTier1Audit } from "../audit/tier1";
 import {
   CONTENT_KINDS,
   createTenant,
@@ -20,8 +21,10 @@ import {
   intakeDir,
   listTenantSlugs,
   readSettings,
+  readTier1,
   tenantExists,
   writeSettings,
+  writeTier1,
   type ContentKind,
   type TenantSettings,
   type TenantSummary,
@@ -383,6 +386,47 @@ export function createAdminRouter(): Router {
       });
 
     res.json({ runs });
+  });
+
+  // --- Tier 1 discoverability ---------------------------------------------
+
+  router.get("/clients/:slug/tier1", (req: Request, res: Response) => {
+    const state = readTier1(req.params.slug);
+    res.json({ ...state, manualChecks: MANUAL_CHECKS });
+  });
+
+  router.post("/clients/:slug/tier1/run", async (req: Request, res: Response) => {
+    try {
+      const slug = req.params.slug;
+      const settings = readSettings(slug);
+      if (!settings?.domain) throw new Error("Set a domain in Settings first.");
+
+      const report = await runTier1Audit(settings.domain);
+      const state = readTier1(slug);
+      writeTier1(slug, { ...state, report });
+
+      res.json({ report });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  router.patch("/clients/:slug/tier1/manual/:id", (req: Request, res: Response) => {
+    try {
+      const slug = req.params.slug;
+      const state = readTier1(slug);
+
+      state.manual[req.params.id] = {
+        checked: req.body?.checked === true,
+        note: typeof req.body?.note === "string" ? req.body.note : (state.manual[req.params.id]?.note ?? ""),
+        updatedAt: new Date().toISOString(),
+      };
+
+      writeTier1(slug, state);
+      res.json({ manual: state.manual });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+    }
   });
 
   // --- system status -------------------------------------------------------

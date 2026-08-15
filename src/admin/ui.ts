@@ -151,8 +151,8 @@ const KINDS = {
   "faqs":{label:"Questions & answers",fields:[["question","Question"],["answer","Answer"]]},
   "credentials":{label:"Licenses & credentials",fields:[["title","Title"],["identifier","Number"],["issuer","Issuer"],["validUntil","Valid until (YYYY-MM-DD)"]]}
 };
-const SECTIONS = ["overview","profile",...Object.keys(KINDS),"sources","publishing","settings"];
-const LABELS = {overview:"Overview",profile:"Business profile",sources:"Sources",publishing:"Publishing",settings:"Settings",...Object.fromEntries(Object.entries(KINDS).map(([k,v])=>[k,v.label]))};
+const SECTIONS = ["overview","discoverability","profile",...Object.keys(KINDS),"sources","publishing","settings"];
+const LABELS = {overview:"Overview",discoverability:"Discoverability",profile:"Business profile",sources:"Sources",publishing:"Publishing",settings:"Settings",...Object.fromEntries(Object.entries(KINDS).map(([k,v])=>[k,v.label]))};
 
 let clients = [], current = null, view = "clients", detail = null;
 
@@ -278,6 +278,44 @@ function overviewView(){
     '</table></div>';
 }
 
+async function discoverabilityView(){
+  const t = await api("/clients/"+current+"/tier1");
+  const r = t.report;
+  const pill = s => s==="pass"?'<span class="pill ok">pass</span>'
+    : s==="fail"?'<span class="pill bad">fail</span>'
+    : s==="warn"?'<span class="pill wait">check</span>':'<span class="pill wait">unknown</span>';
+
+  const autoRows = r ? r.checks.map(c=>
+    '<tr><td>'+pill(c.state)+'</td><td><div class="primary">'+esc(c.label)+'</div>'+
+    '<div class="secondary">'+esc(c.detail)+'</div>'+
+    (c.fix?'<div class="secondary" style="color:var(--warn)">Fix: '+esc(c.fix)+'</div>':"")+
+    '</td></tr>').join("") : "";
+
+  const manualRows = t.manualChecks.map(m=>{
+    const st = t.manual[m.id]||{checked:false,note:""};
+    return '<tr><td style="width:2.2rem"><input type="checkbox" data-manual="'+m.id+'" '+(st.checked?"checked":"")+' style="width:auto"></td>'+
+      '<td><div class="primary">'+esc(m.label)+'</div><div class="secondary">'+esc(m.hint)+'</div></td>'+
+      '<td class="meta">'+(st.checked?'<span class="pill ok">done</span>':'<span class="pill wait">to do</span>')+'</td></tr>';
+  }).join("");
+
+  const doneManual = t.manualChecks.filter(m=>(t.manual[m.id]||{}).checked).length;
+  const testDone = (t.manual["ai-test"]||{}).checked;
+  const allClear = r && r.failed===0 && doneManual===t.manualChecks.length;
+
+  return '<h1>Discoverability</h1><div class="sub">Tier 1 — without these, AI cannot find this business. With them, it can.</div>'+
+    (allClear? '<div class="banner ok"><strong>Tier 1 complete.</strong> Every automated check passes and every manual item is confirmed. Ready for Tier 2.</div>'
+      : r && r.failed>0 ? '<div class="banner bad"><strong>'+r.failed+' automated check'+(r.failed===1?"":"s")+' failing.</strong> These block discovery.</div>' : "")+
+    (!testDone? '<div class="banner warn"><strong>The test has not been run.</strong> Ask ChatGPT, Gemini and Perplexity for a business like this one in its city. If it appears, Tier 1 is solved. That is the whole measure.</div>':"")+
+    '<div class="card"><div class="card-h"><h2>Automated checks</h2>'+
+      '<div class="row">'+(r?'<span class="meta">ran '+esc(new Date(r.ranAt).toLocaleString())+'</span>':"")+
+      '<button class="btn primary" id="runAudit">'+(r?"Re-run":"Run checks")+'</button></div></div>'+
+      (r? '<table>'+autoRows+'</table>' : '<div class="empty">Not run yet. This fetches the site as each AI crawler and checks robots.txt, the sitemap and contact details.</div>')+
+    '</div>'+
+    '<div class="card"><div class="card-h"><h2>Needs a person</h2><span class="meta">'+doneManual+' of '+t.manualChecks.length+' confirmed</span></div>'+
+      '<div class="card-b" style="padding-bottom:0"><div class="sub">These need an account login or judgment. Unchecked means unverified, not failing.</div></div>'+
+      '<table>'+manualRows+'</table></div>';
+}
+
 function sourcesView(){
   return '<h1>Sources</h1><div class="sub">Google first, then the website, then you. Everything extracted arrives unapproved.</div>'+
   '<div class="card"><div class="card-h"><h2>Google Places</h2><span class="meta">no customer authorization needed</span></div>'+
@@ -353,6 +391,7 @@ async function render(){
   const m = $("main");
   if(view==="status"){ m.innerHTML = await statusView(); return; }
   if(view==="clients" || !current){ m.innerHTML = clientsView(); return; }
+  if(view==="discoverability"){ m.innerHTML = await discoverabilityView(); return; }
   if(view==="overview") m.innerHTML = overviewView();
   else if(view==="profile") m.innerHTML = profileView();
   else if(view==="sources") m.innerHTML = sourcesView();
@@ -428,6 +467,15 @@ document.addEventListener("click", async e => {
       current=null; view="clients"; await loadClients(); await render(); toast("Client deleted."); return;
     }
 
+    if(t.id==="runAudit"){
+      t.disabled=true; t.textContent="Checking the site as each crawler…";
+      try{
+        const r = await api("/clients/"+current+"/tier1/run",{method:"POST",body:JSON.stringify({})});
+        toast(r.report.failed===0?"All automated checks passed.":r.report.failed+" check(s) failing.");
+      } finally { await render(); }
+      return;
+    }
+
     if(t.dataset.run){
       const out=$("runOut"); out.textContent="Running… this can take a minute.";
       t.disabled=true;
@@ -458,6 +506,15 @@ document.addEventListener("click", async e => {
 });
 
 function closeNewClient(){ $("newClient").close(); $("ncName").value=""; $("ncDomain").value=""; }
+document.addEventListener("change", async e => {
+  const box = e.target.closest("[data-manual]"); if(!box) return;
+  try{
+    await api("/clients/"+current+"/tier1/manual/"+box.dataset.manual,
+      {method:"PATCH",body:JSON.stringify({checked:box.checked})});
+    await render();
+  }catch(err){ toast(err.message); }
+});
+
 $("ncCancel").addEventListener("click", closeNewClient);
 
 // Buttons are type="button" and the dialog holds no form, so nothing submits on

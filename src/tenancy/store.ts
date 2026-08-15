@@ -258,3 +258,32 @@ export function writeItems<T>(slug: string, kind: ContentKind, items: T[]): void
   const payload = comment ? { _comment: comment, items } : { items };
   fs.writeFileSync(file, JSON.stringify(payload, null, 2) + "\n", "utf8");
 }
+
+// --- Tier 1 audit state ----------------------------------------------------
+
+function auditPath(slug: string): string {
+  return path.join(tenantDir(slug), "tier1.json");
+}
+
+export interface Tier1State {
+  /** Last automated run, whatever shape the audit produced. */
+  report: unknown | null;
+  /** Manual items, keyed by check id. */
+  manual: Record<string, { checked: boolean; note: string; updatedAt: string }>;
+}
+
+export function readTier1(slug: string): Tier1State {
+  const file = auditPath(slug);
+  if (!fs.existsSync(file)) return { report: null, manual: {} };
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as Partial<Tier1State>;
+    return { report: parsed.report ?? null, manual: parsed.manual ?? {} };
+  } catch {
+    return { report: null, manual: {} };
+  }
+}
+
+export function writeTier1(slug: string, state: Tier1State): void {
+  fs.mkdirSync(tenantDir(slug), { recursive: true });
+  fs.writeFileSync(auditPath(slug), JSON.stringify(state, null, 2) + "\n", "utf8");
+}
