@@ -3,8 +3,8 @@ import express, { type Request, type Response } from "express";
 import { buildOpenApiDocument } from "./openapi";
 import { rateLimit } from "./ratelimit";
 import { ROUTES } from "./routes";
-import { FileSource } from "./source/files";
-import { SupabaseSource } from "./source/supabase";
+import { createSource, type SourceKind } from "./source/factory";
+import { buildJsonLd } from "../jsonld/build";
 import type { KnowledgeSource } from "./types";
 
 /**
@@ -20,10 +20,13 @@ import type { KnowledgeSource } from "./types";
 
 interface Options {
   port: number;
-  source: "supabase" | "files" | "auto";
+  source: SourceKind;
   tenant: string;
   includeUnreviewed: boolean;
   baseUrl: string;
+  /** Domain the JSON-LD describes, used for @id anchors. */
+  domain: string;
+  schemaType: string;
 }
 
 function parseArgs(argv: string[]): Options {
@@ -41,29 +44,17 @@ function parseArgs(argv: string[]): Options {
     tenant: get("--tenant") ?? process.env.TENANT_SLUG ?? "titanz",
     includeUnreviewed: argv.includes("--include-unreviewed"),
     baseUrl: get("--base-url") ?? process.env.API_BASE_URL ?? `http://localhost:${port}`,
+    domain: get("--domain") ?? process.env.CATALOG_DOMAIN ?? "example.com",
+    schemaType: get("--type") ?? "LocalBusiness",
   };
-}
-
-function createSource(options: Options): KnowledgeSource {
-  const sourceOptions = {
-    tenant: options.tenant,
-    includeUnreviewed: options.includeUnreviewed,
-  };
-
-  if (options.source === "files") return new FileSource(sourceOptions);
-  if (options.source === "supabase") return new SupabaseSource(sourceOptions);
-
-  // Auto: prefer the real database, fall back to the latest export on disk so
-  // the API is always runnable.
-  if (process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY) {
-    return new SupabaseSource(sourceOptions);
-  }
-  return new FileSource(sourceOptions);
 }
 
 function main(): void {
   const options = parseArgs(process.argv.slice(2));
-  const source = createSource(options);
+  const source: KnowledgeSource = createSource(options.source, {
+    tenant: options.tenant,
+    includeUnreviewed: options.includeUnreviewed,
+  });
   const app = express();
 
   app.set("trust proxy", true);
@@ -82,6 +73,31 @@ function main(): void {
 
   app.get("/health", (_req: Request, res: Response) => {
     res.json({ status: "ok", source: source.kind, tenant: source.tenant });
+  });
+
+  /**
+   * Live schema.org markup.
+   *
+   * Served as raw JSON-LD rather than the {data, meta} envelope, because the
+   * consumer is a crawler reading schema.org — the envelope would break it.
+   *
+   * Serving it live matters for delivery: a snippet on the customer's site can
+   * fetch this, so the markup follows the knowledge layer instead of being
+   * pasted once and going stale the first time hours or services change.
+   */
+  app.get("/jsonld", async (_req: Request, res: Response) => {
+    try {
+      const result = await buildJsonLd(source, {
+        domain: options.domain,
+        schemaType: options.schemaType,
+      });
+      res.setHeader("Content-Type", "application/ld+json");
+      res.setHeader("Cache-Control", "public, max-age=3600");
+      res.send(JSON.stringify(result.graph, null, 2));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(503).json({ error: "source_unavailable", message });
+    }
   });
 
   app.get("/openapi.json", (_req: Request, res: Response) => {

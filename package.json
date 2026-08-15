@@ -14,7 +14,8 @@
     "content:load": "tsx src/db/load-content.ts",
     "intake": "tsx src/intake/run.ts",
     "promote": "tsx src/intake/promote.ts",
-    "intake:places": "tsx src/intake/run-places.ts"
+    "intake:places": "tsx src/intake/run-places.ts",
+    "jsonld": "tsx src/jsonld/run.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",

@@ -94,13 +94,16 @@ export class FileSource implements KnowledgeSource {
    */
   async faqs(): Promise<FaqDto[]> {
     return loadFaqs()
-      .filter((faq) => faq.approved && (faq.published || this.includeUnreviewed))
+      // includeUnreviewed lifts both gates — approval and publication. It is a
+      // local preview switch, and a preview that can't show unapproved content
+      // can't answer "what would this look like once I sign off?"
+      .filter((faq) => this.includeUnreviewed || (faq.approved && faq.published))
       .map((faq) => ({ question: faq.question, answer: faq.answer, service: null }));
   }
 
   async credentials(): Promise<CredentialDto[]> {
     return loadCredentials()
-      .filter((c) => c.approved && (c.published || this.includeUnreviewed))
+      .filter((c) => this.includeUnreviewed || (c.approved && c.published))
       // A lapsed license published as current is a claim about compliance that
       // stopped being true.
       .filter(isCurrent)

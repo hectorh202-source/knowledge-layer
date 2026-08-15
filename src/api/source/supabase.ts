@@ -193,10 +193,14 @@ export class SupabaseSource implements KnowledgeSource {
       .from("faqs")
       .select("question, answer")
       .eq("tenant_id", tenantId)
-      .eq("is_approved", true)
       .order("sort_order");
 
-    if (!this.includeUnreviewed) query = query.eq("is_published", true);
+    // Both gates lift together, matching the file source. Note that RLS also
+    // enforces approved-and-published for anonymous readers, so this flag can
+    // only widen results for a caller the policies already trust.
+    if (!this.includeUnreviewed) {
+      query = query.eq("is_approved", true).eq("is_published", true);
+    }
 
     const { data, error } = await query;
     if (error) throw new Error(`Loading FAQs failed: ${error.message}`);

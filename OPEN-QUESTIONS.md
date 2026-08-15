@@ -198,12 +198,29 @@ Recoverable from git history at `b05b3b6` if it's ever wanted back as one field 
 **Kept from that work:** nothing pricing-specific. The mapping boundary (`src/data/normalize.ts`)
 survived because it was never about pricing.
 
-### 4.6 The biggest remaining gap is schema.org / JSON-LD
-**Status:** OPEN — highest-value unbuilt thing
-The ARD catalog is a bet on a standard with near-zero adoption. JSON-LD is what Google and every AI
-crawler consume **today**, from the WordPress site that already exists. It was flagged early and
-then skipped in favor of the speculative surface.
-**Blocks:** nothing technically. It's just the highest-return work not yet started.
+### 4.6 schema.org / JSON-LD
+**Status:** ANSWERED — built 2026-08-15
+Generated from the same knowledge source the API reads, so published markup can't drift from what
+the API serves. Emitted as one `@graph` with `@id` anchors, and served live at `/jsonld` so a
+snippet on the customer's site can fetch it rather than pasting once and going stale.
+
+### 4.15 The site already has business markup — replace, don't append
+**Status:** OPEN — needs a human decision, per customer
+calltitanz.com already publishes `Plumber` JSON-LD; that's where intake read the NAP. Adding ours
+alongside leaves two independent business definitions on one page and a crawler guessing which is
+authoritative.
+**Options:** replace their block with ours, or keep theirs and publish only the FAQPage node.
+**Why FAQPage alone is tempting:** their 25 FAQs exist as accordion HTML with no markup at all, so
+that node is pure gain with no conflict. The generator detects and warns; it does not decide.
+
+### 4.16 Two schema.org modeling judgment calls
+**Status:** OPEN — low stakes, worth revisiting
+- **Brands serviced → `knowsAbout`.** schema.org has no property for "equipment brands we service".
+  `knowsAbout` expresses subject-matter competence, which is the nearest honest fit; `brand` would
+  wrongly claim ownership.
+- **Licenses → `hasCredential`.** Defined for `EducationalOccupationalCredential`, an imperfect fit
+  for a trade license but the nearest standard property.
+**How to settle:** run the output through Google's Rich Results Test and see what it actually reads.
 
 ### 4.1 Which TitanZ service brings in the most revenue?
 **Status:** OPEN
