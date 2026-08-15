@@ -33,11 +33,31 @@ carries no signature at all.
 binding ceremony. Signing becomes an upsell tier later if registries start weighting it.
 
 ### 1.3 What is the correct media type for an OpenAPI entry?
-**Status:** OPEN
-The draft catalog file uses `application/openapi+json`. The spec example only showed the MCP server
-label (`application/mcp-server+json`); the OpenAPI one was inferred.
+**Status:** OPEN — narrowed, not closed (rechecked 2026-08-15)
+Re-read `agenticresourcediscovery.org/ai_catalog_spec/`. It documents **only**
+`application/mcp-server+json` and defers the full media type list to an external `ai-catalog`
+repository on GitHub. So the OpenAPI type is still a guess.
+**Current guess:** `application/openapi+json`, isolated in `MEDIA_TYPES` in
+`src/catalog/schema.ts` and overridable with `--openapi-type`. The generator warns on every run
+while the default is in use.
 **Why it matters:** A wrong media type may make the manifest invalid.
-**Blocks:** Publishing TitanZ's real catalog. One-line fix once verified.
+**Where to look next:** the `ai-catalog` GitHub repository the spec page points to.
+
+### 1.8 Is `specVersion` "1.0" or "0.9"?
+**Status:** OPEN — new discrepancy found 2026-08-15
+Our June notes recorded ARD as a v0.9 draft. The spec page's example now shows `"specVersion":
+"1.0"`. Either 1.0 shipped in the two months since, or the page is ahead of the published schema.
+**Handling:** defaults to `"1.0"` with a warning on every generation; override with
+`--spec-version`.
+**Blocks:** Publishing. Not the build.
+
+### 1.9 What is confirmed about the manifest shape
+**Status:** ANSWERED (read from the spec page, 2026-08-15)
+- Four root elements: `specVersion`, `host`, `entries`, `collections`
+- `host` carries `displayName` and `identifier` (a domain or DID)
+- Entries carry `identifier`, `displayName`, `type`, `url`, `description`
+- `trustManifest` is an optional per-entry object — baseline manifests are unsigned (see 1.2)
+- Identifiers use a domain-scoped URN convention
 
 ### 1.4 What does `collections` actually allow?
 **Status:** OPEN
@@ -502,6 +522,15 @@ rather than after.
   anon key so the policies actually apply.
 - **`price_stats` is append-only**, one row per job type per run, so pricing drift over time is
   visible rather than silently overwritten.
+- **The catalog generator verifies before it advertises.** Every capability is probed before it
+  appears in the manifest. Unreachable endpoints are excluded, and so are endpoints that return 200
+  with an empty array — that's the dangerous case, because nothing errors while the description
+  promises data that isn't there. The entry description is assembled from what actually has content,
+  so it can't drift from reality.
+- **Surfaces that don't exist are excluded explicitly and reported**, so MCP and A2A being absent is
+  a recorded decision rather than an oversight rediscovered in three months.
+- **An empty catalog is a valid output**, not a failure. Publishing entries that point at nothing is
+  worse than publishing no catalog.
 - **The API serves only reviewed content.** `service_content` drives the pricing endpoint, not
   `price_stats` — a service with statistics but no human-approved write-up simply does not appear.
   Publishing an unreviewed statistical range would put thin samples in front of an AI as if they
