@@ -21,6 +21,21 @@ export interface RouteDefinition {
   itemSchema: Record<string, unknown>;
   collection: boolean;
   handler: (source: KnowledgeSource) => Promise<unknown>;
+  /**
+   * True when this endpoint's data comes from the CRM rather than from
+   * authored content or intake.
+   *
+   * These disappear entirely when the CRM data is generated, rather than
+   * serving fabricated services under a real business's name. Not a flag
+   * someone has to remember to set — an endpoint the system cannot honestly
+   * back does not exist.
+   */
+  requiresCrm?: boolean;
+}
+
+/** Routes that can be served given whether the CRM data is real. */
+export function availableRoutes(crmDataIsMock: boolean): RouteDefinition[] {
+  return ROUTES.filter((route) => !(route.requiresCrm && crmDataIsMock));
 }
 
 const ADDRESS_SCHEMA = {
@@ -141,6 +156,7 @@ export const ROUTES: RouteDefinition[] = [
     itemSchema: SERVICE_SCHEMA,
     collection: true,
     handler: (source) => source.services(),
+    requiresCrm: true,
   },
   {
     path: "/v1/service-areas",
@@ -150,6 +166,7 @@ export const ROUTES: RouteDefinition[] = [
     itemSchema: SERVICE_AREA_SCHEMA,
     collection: true,
     handler: (source) => source.serviceAreas(),
+    requiresCrm: true,
   },
   {
     path: "/v1/brands",
@@ -158,6 +175,7 @@ export const ROUTES: RouteDefinition[] = [
     itemSchema: BRAND_SCHEMA,
     collection: true,
     handler: (source) => source.brands(),
+    requiresCrm: true,
   },
   {
     path: "/v1/faqs",

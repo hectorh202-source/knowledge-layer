@@ -1,0 +1,58 @@
+# Fly.io deployment for the knowledge API.
+#
+# One deployment serves every customer. Each customer's data is reached by
+# tenant, and their own domain points here by CNAME:
+#
+#   api.calltitanz.com  CNAME  knowledge-layer.fly.dev
+#
+# That keeps the data under the customer's domain — which is the stronger
+# entity signal for an answer engine — while the code stays in one place that
+# can be fixed without touching anyone's website.
+#
+# First deploy:
+#   fly launch --no-deploy --name knowledge-layer
+#   fly secrets set SUPABASE_URL=... SUPABASE_ANON_KEY=... TENANT_SLUG=titanz
+#   fly deploy
+#
+# Custom domain:
+#   fly certs add api.calltitanz.com
+
+app = "knowledge-layer"
+primary_region = "mia"   # Miami — nearest region to Southwest Florida
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "3001"
+  NODE_ENV = "production"
+  # Set API_BASE_URL and CATALOG_DOMAIN per deployment so the OpenAPI servers
+  # block and the JSON-LD @id anchors point at the public hostname rather than
+  # localhost. A spec advertising localhost is worse than none — the ARD
+  # catalog points at it.
+
+[http_service]
+  internal_port = 3001
+  force_https = true
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  # Zero is tempting at this traffic, but a cold start on a crawler's first
+  # request risks a timeout, and a crawler that times out may not come back.
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 200
+    hard_limit = 250
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
+
+[checks.health]
+  type = "http"
+  port = 3001
+  path = "/health"
+  interval = "30s"
+  timeout = "5s"
+  grace_period = "10s"

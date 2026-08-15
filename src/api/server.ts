@@ -2,7 +2,7 @@ import "dotenv/config";
 import express, { type Request, type Response } from "express";
 import { buildOpenApiDocument } from "./openapi";
 import { rateLimit } from "./ratelimit";
-import { ROUTES } from "./routes";
+import { availableRoutes } from "./routes";
 import { createSource, type SourceKind } from "./source/factory";
 import { buildJsonLd } from "../jsonld/build";
 import type { KnowledgeSource } from "./types";
@@ -91,6 +91,9 @@ async function main(): Promise<void> {
     includeUnreviewed: options.includeUnreviewed,
   });
 
+  const crmIsMock = await source.isMock();
+  const routes = availableRoutes(crmIsMock);
+
   await assertSafeToServe(source);
 
   if (options.includeUnreviewed && process.env.NODE_ENV === "production") {
@@ -147,10 +150,10 @@ async function main(): Promise<void> {
 
   app.get("/openapi.json", (_req: Request, res: Response) => {
     res.setHeader("Cache-Control", "public, max-age=3600");
-    res.json(buildOpenApiDocument(options.baseUrl, source.tenant));
+    res.json(buildOpenApiDocument(options.baseUrl, source.tenant, routes));
   });
 
-  for (const route of ROUTES) {
+  for (const route of routes) {
     app.get(route.path, async (_req: Request, res: Response) => {
       try {
         const data = await route.handler(source);

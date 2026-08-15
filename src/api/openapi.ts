@@ -1,4 +1,4 @@
-import { ROUTES } from "./routes";
+import type { RouteDefinition } from "./routes";
 
 /**
  * Generates the OpenAPI document from the route registry.
@@ -8,10 +8,14 @@ import { ROUTES } from "./routes";
  * mismatch. The ARD catalog points at this document, so if it lies, an agent
  * calls an endpoint that doesn't behave as advertised.
  */
-export function buildOpenApiDocument(baseUrl: string, tenantName: string): Record<string, unknown> {
+export function buildOpenApiDocument(
+  baseUrl: string,
+  tenantName: string,
+  routes: RouteDefinition[]
+): Record<string, unknown> {
   const paths: Record<string, unknown> = {};
 
-  for (const route of ROUTES) {
+  for (const route of routes) {
     const dataSchema = route.collection
       ? { type: "array", items: route.itemSchema }
       : route.itemSchema;
