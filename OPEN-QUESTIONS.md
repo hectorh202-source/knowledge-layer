@@ -117,7 +117,7 @@ stated answer makes you easier to buy from.
 **Status:** ANSWERED — decided 2026-08-15
 All ServiceTitan and CRM code removed. The goal is making a business findable by AI, and a CRM
 integration is a gate in front of that — it blocks onboarding, only helps customers on one specific
-CRM, and none of it was needed. Recoverable from git history at  if it ever earns its way
+CRM, and none of it was needed. Recoverable from git history at `baf2923` if it ever earns its way
 back as an optional enrichment.
 
 **The three sources, in priority order:**
