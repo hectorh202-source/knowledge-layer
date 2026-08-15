@@ -7,7 +7,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit",
-    "export": "tsx src/export/run.ts"
+    "export": "tsx src/export/run.ts",
+    "analyze": "tsx src/analysis/run.ts"
   },
   "dependencies": {
     "axios": "^1.7.9",
