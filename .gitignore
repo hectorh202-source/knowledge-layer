@@ -19,3 +19,4 @@ content/intake/
 content/faqs.json
 content/credentials.json
 content/business-profile.json
+!content/business-profile.example.json
