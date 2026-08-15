@@ -5,6 +5,8 @@ import { rateLimit } from "./ratelimit";
 import { ROUTES } from "./routes";
 import { createSource, type SourceKind } from "./source/factory";
 import { buildJsonLd } from "../jsonld/build";
+import { buildDashboardData } from "../dashboard/data";
+import { renderDashboard } from "../dashboard/page";
 import type { KnowledgeSource } from "./types";
 
 /**
@@ -85,6 +87,26 @@ async function main(): Promise<void> {
   });
 
   /**
+   * Review dashboard.
+   *
+   * Reads the content files directly rather than going through the source, so
+   * it can show what is NOT approved — which is the entire point. The public
+   * API cannot show that, and must not.
+   *
+   * Disabled in production for the same reason: it would expose unapproved
+   * content, and there is no authentication on this service.
+   */
+  app.get("/dashboard", (_req: Request, res: Response) => {
+    if (process.env.NODE_ENV === "production") {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.setHeader("Cache-Control", "no-store");
+    res.send(renderDashboard(buildDashboardData()));
+  });
+
+  /**
    * Live schema.org markup.
    *
    * Served as raw JSON-LD rather than the {data, meta} envelope, because the
@@ -154,15 +176,12 @@ async function main(): Promise<void> {
     console.log(`  listening : http://localhost:${options.port}`);
     console.log(`  source    : ${source.kind}`);
     console.log(`  tenant    : ${source.tenant}`);
+    console.log(`  dashboard : http://localhost:${options.port}/dashboard`);
     console.log(`  spec      : http://localhost:${options.port}/openapi.json`);
 
     if (options.includeUnreviewed) {
-      console.log(`\n  ! --include-unreviewed is on. Unreviewed price ranges are being`);
-      console.log(`    served. Local inspection only — never run this way in production.`);
-    }
-    if (source.kind === "files") {
-      console.log(`\n  Serving from the latest export on disk. Authored content (pricing`);
-      console.log(`  factors, FAQs) lives only in the database, so those will be empty.`);
+      console.log(`\n  ! --include-unreviewed is on, so unapproved content is being served.`);
+      console.log(`    Local inspection only — never run this way in production.`);
     }
     console.log("");
   });

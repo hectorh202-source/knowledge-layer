@@ -12,37 +12,54 @@ you know when to stop and move on.
 This is the actual answer to "get discovered by AI." Nothing else on this page is
 required for that. Most of it is settings and audit work, not building.
 
+> **Audited against calltitanz.com on 2026-08-15.** Findings inline. One real
+> failure found, and it is not in robots.txt.
+
 ### The website has to be readable
 
-- [ ] Check robots.txt is not blocking AI crawlers. Allow: GPTBot, OAI-SearchBot, PerplexityBot, Googlebot, Google-Extended, ClaudeBot
-- [ ] Site loads without login walls on the pages that matter
-- [ ] Site isn't blocking crawlers at the firewall or CDN level (separate from robots.txt)
+- [x] Check robots.txt is not blocking AI crawlers — **clean.** Only `Disallow: /wp-admin/`, and the sitemap is declared.
+- [x] Site loads without login walls on the pages that matter — 14 pages crawled freely.
+- [ ] **FAILING — Site isn't blocking crawlers at the firewall or CDN level.**
+      **GPTBot gets a consistent `429 Too Many Requests`** across spaced retries,
+      while a browser user agent gets `200` with identical timing. Response
+      headers identify **Hostinger's CDN edge (`Server: hcdn`)** — `Content-Length: 0`,
+      so the request never reaches WordPress. This is a Hostinger support ticket,
+      not a code change or a robots.txt edit.
+      **Tested and passing:** OAI-SearchBot `200`, PerplexityBot `200`,
+      ClaudeBot `200`, Googlebot `200`.
+      **Impact, stated precisely:** OAI-SearchBot is the crawler behind ChatGPT
+      Search results, and it passes — so the site is not invisible to ChatGPT.
+      GPTBot is OpenAI's other crawler and it is being turned away at the host.
 
 ### The website has to say what you do
 
-- [ ] A page stating services offered
-- [ ] A page stating service areas — real city names or ZIPs
-- [ ] Contact info visible as text, not only inside an image or a form
-- [ ] Basic about/credentials — licensed, insured, years in business
+- [x] A page stating services offered — **55 service pages** (34 plumbing, 17 HVAC, 4 air conditioning).
+- [x] A page stating service areas — **`/coverage` plus 7 city pages**: Port Charlotte, Punta Gorda, North Fort Myers, Cape Coral, Englewood, Venice, Sarasota.
+- [x] Contact info visible as text — `tel:` and `mailto:` links present, not images.
+- [x] Basic about/credentials — `/about-us` exists; licenses `CFC1434184` (plumbing) and `CAC1824330` (HVAC) appear in page text, along with "since 2007".
 
 ### Google has to have you indexed
 
-- [ ] Domain verified in Google Search Console
-- [ ] XML sitemap submitted
-- [ ] Confirm key pages are actually indexed (not just submitted)
+- [ ] Domain verified in Google Search Console — **cannot check, needs the account login.**
+- [x] XML sitemap submitted — `sitemap_index.xml` exists, is declared in robots.txt, and covers ~191 URLs across 9 child sitemaps.
+- [ ] Confirm key pages are actually indexed — **cannot check reliably without Search Console.**
 
 ### The business listing has to be right
 
-- [ ] Google Business Profile claimed and complete
-- [ ] Correct categories
-- [ ] Service areas set
-- [ ] Hours, phone, address accurate
-- [ ] Business name, address, phone IDENTICAL everywhere it appears
+- [ ] Google Business Profile claimed and complete — a GBP link exists on the site (`cid=15554419587955723858`), but completeness is unverified. Needs the Places API key or two minutes in the dashboard.
+- [ ] Correct categories — unverified.
+- [ ] Service areas set — unverified.
+- [ ] Hours, phone, address accurate — **hours are not published anywhere we can see.** This is also the one blocking gap left in the business profile.
+- [ ] Business name, address, phone IDENTICAL everywhere — needs a directory audit. Note the domain split: `titanzplumbing.com` is a landing shell in front of `calltitanz.com`, which is a NAP consistency risk worth checking.
 
 ### Something outside your site has to confirm you exist
 
-- [ ] Google reviews present
-- [ ] Listed on a handful of real directories (Yelp, BBB, Angi, Apple Maps, Bing Places, chamber of commerce)
+- [ ] Google reviews present — a `/reviews` section exists on the site (13 pages), but the actual Google review count is unverified.
+- [ ] Listed on real directories — **not checked.** Yelp, BBB, Angi, Apple Maps, Bing Places, chamber of commerce.
+
+### The test itself
+
+- [ ] **Not run.** Ask ChatGPT, Gemini and Perplexity for a plumber in Port Charlotte and see whether TitanZ appears. Five minutes, and it is the whole measure.
 
 **TIER 1 IS DONE WHEN:** you can ask ChatGPT, Gemini, and Perplexity for a
 plumber in your city and your business appears. Test it. That's the whole
