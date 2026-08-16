@@ -532,12 +532,23 @@ export async function sendInvoice(invoiceId: string): Promise<string | null> {
  * about something recorded as paid by bank transfer is not evidence that the
  * money came back.
  */
-export async function reconcile(): Promise<{ checked: number; paid: string[] }> {
+export async function reconcile(slug?: string): Promise<{ checked: number; paid: string[] }> {
   if (!stripeEnabled()) return { checked: 0, paid: [] };
 
   const mode = stripeMode();
+
+  // Scoped to one client when asked. The per-client page reconciles just that
+  // client, which is one request rather than one per open invoice on the books.
+  let filter = "";
+  if (slug) {
+    const found = await accountFor(slug);
+    if (!found) return { checked: 0, paid: [] };
+    filter = `&account_id=eq.${found.account.id}`;
+  }
+
   const open = ((await rest(
-    `billing_invoices?status=eq.issued&provider_ref=not.is.null&select=id,number,provider_ref,provider_mode`
+    `billing_invoices?status=eq.issued&provider_ref=not.is.null${filter}` +
+      `&select=id,number,provider_ref,provider_mode`
   )) ?? []) as {
     id: string;
     number: string;

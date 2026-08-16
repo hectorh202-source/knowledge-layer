@@ -144,6 +144,23 @@ export function billingRoutes(visibleSlugs: (req: Request) => Promise<string[]>)
   /** One client's billing: account, subscription, invoice history. */
   router.get("/clients/:slug", async (req: Request, res: Response) => {
     try {
+      // Reconcile this client before reading them back. This is the page you
+      // are on immediately after raising and paying an invoice, so it is the
+      // page where a payment landing matters most — leaving it to the summary
+      // page meant navigating elsewhere to find out that money had arrived.
+      let synced = null;
+      if (stripeEnabled()) {
+        try {
+          synced = await reconcile(req.params.slug);
+        } catch (error) {
+          console.error(
+            `  Stripe reconcile failed for ${req.params.slug}: ${
+              error instanceof Error ? error.message : error
+            }`
+          );
+        }
+      }
+
       const [found, invoices, plans] = await Promise.all([
         accountFor(req.params.slug),
         invoicesFor(req.params.slug),
@@ -155,6 +172,7 @@ export function billingRoutes(visibleSlugs: (req: Request) => Promise<string[]>)
         invoices,
         plans,
         stripe: { enabled: stripeEnabled(), mode: stripeMode() },
+        synced,
       });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
@@ -287,10 +305,11 @@ export function billingRoutes(visibleSlugs: (req: Request) => Promise<string[]>)
   });
 
   /** Ask Stripe about every open invoice and mark the paid ones paid. */
-  router.post("/reconcile", async (_req: Request, res: Response) => {
+  router.post("/reconcile", async (req: Request, res: Response) => {
     try {
       if (!stripeEnabled()) throw new Error("Stripe is not configured.");
-      res.json(await reconcile());
+      const slug = typeof req.body?.slug === "string" ? req.body.slug : undefined;
+      res.json(await reconcile(slug));
     } catch (error) {
       res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
     }

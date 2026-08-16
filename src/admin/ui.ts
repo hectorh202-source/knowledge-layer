@@ -1135,7 +1135,26 @@ async function clientBillingView(){
     '<option value="'+esc(pl.id)+'"'+(sub&&sub.planId===pl.id?' selected':'')+'>'+
     esc(pl.name)+' — '+usd(pl.setupCents)+' setup, '+usd(pl.monthlyCents)+'/mo</option>').join("");
 
+  const invs = r.invoices || [];
+  const totalPaid = invs.filter(i=>i.status==="paid").reduce((t,i)=>t+i.totalCents,0);
+  const totalOpen = invs.filter(i=>i.status==="issued").reduce((t,i)=>t+i.totalCents,0);
+  const stat=(v,l)=>'<div class="stat"><div class="n">'+v+'</div><div class="l">'+l+'</div></div>';
+
   return '<h1>Billing</h1><div class="sub">What '+esc(name)+' pays, and what has been sent.</div>'+
+
+    (r.synced && r.synced.paid && r.synced.paid.length
+      ? '<div class="banner ok"><strong>Payment received.</strong> '+
+        esc(r.synced.paid.join(", "))+' just came back from Stripe as paid.</div>'
+      : '')+
+
+    (stripeOn && r.stripe.mode==="live"
+      ? '<div class="banner bad"><strong>Stripe is in LIVE mode.</strong> Anything raised here is real money.</div>'
+      : '')+
+
+    (invs.length
+      ? '<div class="grid">'+stat(usd(totalPaid),"Paid to date")+stat(usd(totalOpen),"Outstanding")+
+        stat(sub&&sub.status==="active"?usd(sub.monthlyCents):"—","Monthly")+'</div>'
+      : '')+
 
     (!acc
       ? '<div class="banner warn"><strong>No billing account yet.</strong> Fill in the contact below and save &mdash; '+
@@ -1190,9 +1209,10 @@ async function clientBillingView(){
         : '<div class="sub" style="margin:0">Save the billing contact first.</div>')+
     '</div></div>'+
 
-    '<div class="card"><div class="card-h"><h2>Invoices</h2>'+
+    '<div class="card"><div class="card-h"><h2>Invoices</h2><div class="row">'+
+      (stripeOn&&totalOpen>0?'<button class="btn quiet" id="syncClient">Check Stripe</button>':"")+
       (sub&&sub.status==="active"?'<button class="btn" id="raiseInvoice">Raise next invoice</button>':"")+
-      '</div>'+
+      '</div></div>'+
       ((r.invoices||[]).length
         ? '<table><tr><th>Invoice</th><th>Amount</th><th>Status</th><th></th></tr>'+invoiceRows+'</table>'
         : '<div class="empty">Nothing invoiced yet.</div>')+
@@ -1669,8 +1689,9 @@ document.addEventListener("click", async e => {
         const r = await api("/billing/clients/"+current+"/invoice",{method:"POST",body:JSON.stringify({})});
         await render();
         toast(r.invoice
-          ? "Invoice "+r.invoice.number+" for "+usd(r.invoice.totalCents)+"."
-          : "Nothing due — this period is already invoiced.");
+          ? "Invoice "+r.invoice.number+" for "+usd(r.invoice.totalCents)+
+            (r.invoice.providerUrl?" — payment page ready below." : stripeOn?" — not in Stripe yet, press Push." : ".")
+          : "Nothing due — this period is already invoiced.", 6000);
       } finally { done(); }
       return;
     }
@@ -1692,6 +1713,18 @@ document.addEventListener("click", async e => {
       try{
         await api("/billing/invoices/"+t.dataset.void+"/void",{method:"POST",body:JSON.stringify({})});
         await render(); toast("Voided.");
+      } finally { done(); }
+      return;
+    }
+
+    if(t.id==="syncClient"){
+      const done = working(t, "Checking");
+      try{
+        const r = await api("/billing/reconcile",{method:"POST",body:JSON.stringify({slug:current})});
+        await render();
+        toast(r.paid.length
+          ? "Paid: "+r.paid.join(", ")
+          : "Checked "+r.checked+" open invoice(s) — Stripe has not recorded payment yet.");
       } finally { done(); }
       return;
     }
