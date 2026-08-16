@@ -189,6 +189,28 @@ testing while charging a real card. Every billing screen says which mode it is
 in, and a link made in the other mode is flagged as dead rather than quietly
 failing when a client tries to pay it.
 
+### Taking a card over the phone
+
+**Key a card instead** on a client's billing page opens a card field and
+charges immediately — setup fee and first month together, then monthly on the
+same card. Stripe emails the receipt.
+
+The field is an **iframe served by Stripe**. The number never enters this
+page's DOM and never reaches the server. That is what keeps the application
+in PCI DSS **SAQ A**; a plain input posting a card number to your own server
+puts you in **SAQ D**, which is an annual audit.
+
+Needs `STRIPE_PUBLISHABLE_KEY`, which must match the secret key's mode. A
+mismatched pair tokenises the card and then fails to attach it, so the check
+is made up front and the button is hidden rather than failing when pressed.
+
+The field mounts only when asked for, not with the page — a card form sitting
+open on screen is a card form in front of whoever walks past.
+
+Stripe's dashboard has a Virtual Terminal that does the same job. This exists
+because it keeps the client-to-subscription link automatic, which keying it in
+the dashboard does not.
+
 ### What is deliberately not built
 
 Changing a card, downloading a receipt, issuing a refund. All of it goes to

@@ -174,6 +174,27 @@ of `BusinessProfile` and drifted every time a field changed — it now extends i
 
 ---
 
+## The portal is one template literal
+
+### A newline escape emitted a real line break
+
+**Symptom.** Portal stuck on `Loading…`. Server healthy, page 200, nothing in
+the log.
+
+**Cause.** `src/admin/ui.ts` is one big template literal. A `\n` written
+inside a JavaScript string in that file is consumed at build time and emits an
+**actual line break** into the served script — inside a quoted string, which
+is a syntax error, so the whole inline script fails to parse and nothing runs.
+
+**Fix.** Double it: `\\n` in the source emits `\n` in the output. Same family
+as the backtick rule — anything the template literal treats as an escape has
+to be escaped twice.
+
+**Found** by a parse check in CI-less form: extract the inline script and run
+it through `new Function`. Worth doing after any edit to that file.
+
+---
+
 ## Storage
 
 ### Keys in `.env` decide which database you are editing

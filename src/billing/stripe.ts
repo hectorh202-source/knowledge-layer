@@ -379,6 +379,145 @@ export async function openInvoices(): Promise<{ customerId: string; amountCents:
   }
 }
 
+// --- taking a card on the phone ---------------------------------------------
+
+/**
+ * The publishable key, for the card field in the browser.
+ *
+ * Safe to send to a page — that is what it is for. It can create tokens and
+ * nothing else. The secret key must never leave the server.
+ *
+ * Derived from the secret key's mode so the two cannot disagree: a live
+ * publishable key on a page whose server is in test mode produces a card that
+ * tokenises and then fails to attach, with nothing saying why.
+ */
+export function publishableKey(): string | null {
+  const key = process.env.STRIPE_PUBLISHABLE_KEY?.trim();
+  if (!key) return null;
+
+  const mode = stripeMode();
+  const keyMode = key.startsWith("pk_live_") ? "live" : "test";
+  if (mode && keyMode !== mode) {
+    throw new Error(
+      `STRIPE_PUBLISHABLE_KEY is a ${keyMode} key but STRIPE_SECRET_KEY is ${mode}. ` +
+        "They must match — a card entered against a mismatched pair tokenises and then fails to attach."
+    );
+  }
+  return key;
+}
+
+export interface PhoneSetup {
+  customerId: string;
+  clientSecret: string;
+  publishableKey: string;
+}
+
+/**
+ * Prepare to take a card over the phone.
+ *
+ * Creates the customer and a SetupIntent. The card itself is collected by
+ * Stripe's own iframe in the browser and never reaches this server, which is
+ * the whole point: the alternative puts the operator's machine and this
+ * application inside PCI scope.
+ *
+ * An email is required. A receipt has to go somewhere, and a card taken on a
+ * phone call with no record sent to the customer is the shape of a dispute.
+ */
+export async function preparePhonePayment(input: {
+  slug: string;
+  email: string;
+  name: string;
+}): Promise<PhoneSetup> {
+  const pk = publishableKey();
+  if (!pk) {
+    throw new Error(
+      "STRIPE_PUBLISHABLE_KEY is not set. It is needed for the card field, and is safe to expose."
+    );
+  }
+  if (!input.email.trim()) throw new Error("An email is required — the receipt has to go somewhere.");
+
+  try {
+    // Reuse a customer already on this slug rather than making a second one.
+    // Two customers for one client splits their payment history in half.
+    const found = await stripe().customers.search({
+      query: `metadata['tenant_slug']:'${input.slug.replace(/'/g, "")}'`,
+      limit: 1,
+    });
+
+    const customer =
+      found.data[0] ??
+      (await stripe().customers.create({
+        email: input.email.trim(),
+        name: input.name.trim() || input.slug,
+        metadata: { tenant_slug: input.slug },
+      }));
+
+    const intent = await stripe().setupIntents.create({
+      customer: customer.id,
+      usage: "off_session",
+      // Cards only. A phone call cannot complete a bank redirect or a wallet.
+      payment_method_types: ["card"],
+      metadata: { tenant_slug: input.slug, taken: "by phone" },
+    });
+
+    if (!intent.client_secret) throw new Error("Stripe returned no client secret.");
+
+    return { customerId: customer.id, clientSecret: intent.client_secret, publishableKey: pk };
+  } catch (error) {
+    throw readable(error);
+  }
+}
+
+/**
+ * Start the subscription on a card already collected.
+ *
+ * Charges immediately — the first invoice carries the setup fee and the first
+ * month together, exactly as the payment link does, so a client onboarded by
+ * phone and one who paid a link end up in the same state.
+ *
+ * Stripe emails the receipt. Building that here would mean an email provider
+ * and a template that has to stay correct as prices change, to send something
+ * Stripe already sends better.
+ */
+export async function subscribeWithCard(input: {
+  slug: string;
+  customerId: string;
+  paymentMethodId: string;
+  priceId: string;
+  setupPriceId?: string | null;
+}): Promise<LiveSubscription> {
+  try {
+    // Attach and make default before subscribing. A subscription created
+    // against a customer with no default card goes straight to incomplete and
+    // the first charge never happens.
+    await stripe().paymentMethods.attach(input.paymentMethodId, { customer: input.customerId });
+    await stripe().customers.update(input.customerId, {
+      invoice_settings: { default_payment_method: input.paymentMethodId },
+    });
+
+    const created = await stripe().subscriptions.create(
+      {
+        customer: input.customerId,
+        items: [{ price: input.priceId }],
+        // The setup fee rides on the first invoice rather than as a separate
+        // charge, so the client sees one payment for the amount they agreed.
+        add_invoice_items: input.setupPriceId ? [{ price: input.setupPriceId }] : undefined,
+        default_payment_method: input.paymentMethodId,
+        payment_behavior: "error_if_incomplete",
+        metadata: { tenant_slug: input.slug, taken: "by phone" },
+        expand: ["customer"],
+      },
+      { idempotencyKey: `kl-phone-${input.slug}-${input.paymentMethodId}` }
+    );
+
+    const sub = toSubscription(created);
+    if (!sub) throw new Error("Subscription created but carried no client reference.");
+    return sub;
+  } catch (error) {
+    throw readable(error);
+  }
+}
+
 /**
  * Cancel. At period end by default — the client has paid for the month and
  * should keep it.

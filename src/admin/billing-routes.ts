@@ -12,10 +12,13 @@ import {
   billingPortalUrl,
   cancelSubscription,
   ping,
+  preparePhonePayment,
+  publishableKey,
   resumeSubscription,
   seedCatalog,
   stripeEnabled,
   stripeMode,
+  subscribeWithCard,
   subscriptionFor,
 } from "../billing/stripe";
 
@@ -80,7 +83,19 @@ export function billingRoutes(visibleSlugs: (req: Request) => Promise<string[]>)
     try {
       res.json({
         ...(await clientBilling(req.params.slug)),
-        stripe: { enabled: stripeEnabled(), mode: stripeMode() },
+        stripe: {
+          enabled: stripeEnabled(),
+          mode: stripeMode(),
+          // Whether the card field can be offered at all. Reported rather than
+          // assumed, so the button is absent instead of failing when pressed.
+          canTakeCard: (() => {
+            try {
+              return Boolean(publishableKey());
+            } catch {
+              return false;
+            }
+          })(),
+        },
       });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
@@ -167,6 +182,54 @@ export function billingRoutes(visibleSlugs: (req: Request) => Promise<string[]>)
 
       const back = `${req.protocol}://${req.get("host")}/`;
       res.json({ url: await billingPortalUrl(account.stripeCustomerId, back) });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  /**
+   * Step one of taking a card on a call: a customer and a SetupIntent.
+   *
+   * Returns the publishable key and a client secret. The card itself is
+   * collected by Stripe's iframe in the browser and never reaches this server
+   * — which is what keeps this application out of PCI scope.
+   */
+  router.post("/clients/:slug/phone/prepare", async (req: Request, res: Response) => {
+    try {
+      res.json(
+        await preparePhonePayment({
+          slug: req.params.slug,
+          email: String(req.body?.email ?? ""),
+          name: String(req.body?.name ?? ""),
+        })
+      );
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  /**
+   * Step two: subscribe on the card the browser just tokenised.
+   *
+   * Charges immediately — setup fee and first month together, the same amount
+   * a payment link would take, so a client onboarded by phone ends up in
+   * exactly the state one who paid a link does. Stripe emails the receipt.
+   */
+  router.post("/clients/:slug/phone/subscribe", async (req: Request, res: Response) => {
+    try {
+      const { customerId, paymentMethodId, priceId, setupPriceId } = req.body ?? {};
+      if (!customerId || !paymentMethodId) throw new Error("The card was not collected.");
+      if (!priceId) throw new Error("Pick a plan.");
+
+      const subscription = await subscribeWithCard({
+        slug: req.params.slug,
+        customerId: String(customerId),
+        paymentMethodId: String(paymentMethodId),
+        priceId: String(priceId),
+        setupPriceId: setupPriceId ? String(setupPriceId) : null,
+      });
+
+      res.json({ subscription });
     } catch (error) {
       res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
     }
