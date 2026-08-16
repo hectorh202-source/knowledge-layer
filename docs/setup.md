@@ -37,7 +37,8 @@ key.
 | `GOOGLE_MAPS_API_KEY` | Google Places intake | Your key, not the customer's. See below. |
 | `SUPABASE_URL` | Publishing to a database | Optional. Files work without it. |
 | `SUPABASE_ANON_KEY` | The public API | **Must be the anon key.** See the warning below. |
-| `SUPABASE_SERVICE_ROLE_KEY` | The content loader | Server-side only. Never send to a browser. |
+| `SUPABASE_SERVICE_ROLE_KEY` | The content loader, and the portal's store | Server-side only. Never send to a browser. |
+| `CONTENT_STORE` | Forcing a store | `files` or `supabase`. Unset auto-detects. See below. |
 | `PLATFORM_ADMIN_EMAILS` | Creating agencies | Comma separated. Empty means no platform tier. |
 | `TENANT_SLUG` | CLI default | Convenience only; `--tenant` overrides it. |
 | `CATALOG_DOMAIN` | Catalog generation | Tier 3. |

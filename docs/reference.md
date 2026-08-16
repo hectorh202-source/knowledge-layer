@@ -50,6 +50,7 @@ unless `TENANT_SLUG` is set in `.env`.
 |---|---|
 | `npm run vocabulary:build` | Regenerate the schema.org subset from schema.org |
 | `npm run docs:check` | Verify these docs still match the code |
+| `npm run content:migrate` | Copy clients from disk into Supabase. `--dry-run`, `--tenant <slug>`, `--force` |
 | `npx tsx scripts/migrate-profile-fields.ts` | One-off migration. `--dry-run` supported |
 
 ## Environment variables
@@ -142,11 +143,12 @@ src/
   db/           Supabase client and content loader
   intake/       crawl, fetch, html, jsonld, places, promote
   jsonld/       build, validate, vocabulary.json
-  tenancy/      per-tenant file store
+  tenancy/      storage layer (files and Supabase), tenants, agencies
 scripts/
   build-vocabulary.ts        regenerate the schema.org subset
   check-docs.ts              docs freshness check
   migrate-profile-fields.ts  one-off migration
+  migrate-to-supabase.ts     copy clients from disk into the database
 supabase/migrations/         SQL schema
 docs/                        you are here
 ```

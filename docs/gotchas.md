@@ -174,6 +174,38 @@ of `BusinessProfile` and drifted every time a field changed — it now extends i
 
 ---
 
+## Storage
+
+### Keys in `.env` decide which database you are editing
+
+**Symptom.** Client list suddenly empty, or — much worse — edits made locally
+landing in production.
+
+**Cause.** `storage()` picks Supabase whenever `SUPABASE_URL` and
+`SUPABASE_SERVICE_ROLE_KEY` are both set. Pasting production keys in to test one
+thing repoints every read and write, and nothing on screen says so.
+
+**Fix.** `CONTENT_STORE=files` pins the file store regardless of keys.
+`CONTENT_STORE=supabase` is the opposite guard: it throws rather than falling
+back to files when keys are missing, so a typo'd variable name fails loudly
+instead of writing a client's data somewhere nobody is looking for it.
+
+### A client in the `tenants` table is not a migrated client
+
+**Symptom.** `content:migrate` reporting a client as already done, while the
+portal shows it as empty.
+
+**Cause.** `npm run content:load` creates a `tenants` row and published content
+rows. It writes none of what the portal needs — settings, audit state, intake,
+unapproved content. Checking `tenantExists` therefore skips exactly the clients
+that most need migrating.
+
+**Fix.** The migration keys on the presence of a **settings** row. Settings are
+written by the portal and by the migration and by nothing else, so they are the
+one reliable sign that a client has been through this.
+
+---
+
 ## Repository
 
 ### `.gitignore` excluded source code

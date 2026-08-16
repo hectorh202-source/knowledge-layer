@@ -30,6 +30,24 @@ optionally into a Supabase database and a public API.
 
 ## Where data lives
 
+Two stores behind one interface, `Storage` in `src/tenancy/storage.ts`.
+Nothing above it knows which is in use.
+
+| | `FileStorage` | `SupabaseStorage` |
+|---|---|---|
+| Backing | `content/tenants/<slug>/` | Postgres, via PostgREST |
+| Reached with | the filesystem | the service role key |
+| Good for | local work, offline, a single operator | anything deployed |
+
+**Supabase when configured, files otherwise**, decided once per process so a
+single run cannot read from one and write to the other. `CONTENT_STORE=files`
+forces files even with Supabase configured; `CONTENT_STORE=supabase` refuses to
+start without keys rather than silently falling back.
+
+That escape hatch matters more than it looks. Production keys in `.env` are
+otherwise enough to move every read and write onto the live database, with
+nothing on screen to say so.
+
 ```
 content/
   business-profile.example.json     template, committed
@@ -50,6 +68,26 @@ content/
 
 `content/tenants/` is gitignored deliberately. It holds real customer data and
 unreviewed third-party content scraped from their sites.
+
+The Supabase side is the same shape: `tenant_settings`, `business_profile`, the
+five content tables, `tier1_audits`, `intake_runs`. All service-role only —
+none of it is crawler-facing and some of it (account links, audit findings) is
+commercially sensitive.
+
+### Moving a client from files into the database
+
+```bash
+npm run content:migrate -- --dry-run
+```
+
+A copy, not a move: the files are left in place, so a bad run costs a re-run
+and nothing else. It skips any client that already has settings in Supabase —
+the likely mistake is running it after a week of portal edits and silently
+reverting them to whatever the files last held. `--force` overrides that.
+
+Every loader is async because of this split. A function that reads a client
+returns a promise even when the file store answers instantly, since the same
+call has to work against a database.
 
 ## Settings versus profile — an important split
 
