@@ -150,6 +150,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
     <div class="navlabel">System</div>
     <button class="nav" data-sys="status">Status</button>
     <button class="nav" data-sys="clients">All clients</button>
+    <form method="post" action="/logout" id="signOut" hidden><button class="nav" type="submit">Sign out</button></form>
   </aside>
   <main id="main"><div class="empty">Loading…</div></main>
 </div>
@@ -1156,7 +1157,27 @@ $("ncGo").addEventListener("click", async () => {
   finally{ btn.disabled=false; }
 });
 
+/**
+ * Reveal Sign out only when there is a session to end.
+ *
+ * The page is one static string and cannot know whether auth is configured, so
+ * it asks. Showing a sign-out button on an unauthenticated install would be a
+ * control that does nothing.
+ */
+async function showSession(){
+  try{
+    const r = await fetch("/whoami");
+    if(!r.ok) return;
+    const {user} = await r.json();
+    if(!user) return;
+    const form = $("signOut");
+    form.hidden = false;
+    form.querySelector("button").textContent = "Sign out — " + (user.email || "signed in");
+  }catch(err){ /* auth not configured; leave it hidden */ }
+}
+
 (async()=>{
+  showSession();
   await loadClients();
 
   // Restore where you were. A stale or hand-edited URL must not strand anyone,

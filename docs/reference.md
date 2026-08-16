@@ -64,6 +64,11 @@ most: **`SUPABASE_ANON_KEY` must be the anon key**, never the service role key.
 | Admin portal | 3100 | `ADMIN_PORT`, or `--port` |
 | Public API | 3001 | `PORT`, or `--port` |
 
+The portal binds to `127.0.0.1` unless given `--host` or `ADMIN_HOST`, and it
+**refuses any other host without Supabase configured** — it edits every
+client's data and shells out to the intake tools, so exposing it has to be a
+deliberate act rather than a default.
+
 ## Public API
 
 Read-only, unauthenticated, crawler-facing. Serves only content that is both
@@ -78,9 +83,28 @@ GET /v1/credentials
 GET /v1/brands
 ```
 
+## Portal routes
+
+Public — the only two that work without a session:
+
+| Method | Path | |
+|---|---|---|
+| `GET` | `/login` | Sign-in form |
+| `POST` | `/login` | Email and password, sets an httpOnly session cookie |
+| `GET` | `/health` | Reports whether auth is configured |
+
+Everything else requires a session. Pages redirect to `/login`; anything under
+`/admin/api` returns `401` JSON instead, because a browser following a redirect
+into a fetch handler produces a login page rendered inside a JSON parser.
+
+| Method | Path | |
+|---|---|---|
+| `POST` | `/logout` | Revokes the session and clears the cookie |
+| `GET` | `/whoami` | The signed-in user, or null |
+
 ## Admin API
 
-Mounted at `/admin/api`. Localhost only, no authentication.
+Mounted at `/admin/api`. Requires a session.
 
 | Method | Path |
 |---|---|

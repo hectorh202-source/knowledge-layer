@@ -83,11 +83,15 @@ added or removed. Deriving one from the other makes that impossible.
 
 | Server | Command | Port | Purpose |
 |---|---|---|---|
-| Admin portal | `npm run portal` | 3100 | The operator UI. Writes. Localhost only. |
+| Admin portal | `npm run portal` | 3100 | The operator UI. Writes. Behind Supabase Auth. |
 | Public API | `npm run api` | 3001 | Read-only, crawler-facing, unauthenticated. |
 
 They are separate processes on purpose. A misconfigured route on the public
 surface cannot turn it into something that accepts writes.
+
+The public API stays unauthenticated deliberately — crawlers cannot log in, and
+everything it serves is already approved and published. RLS on the anon key is
+its boundary, not a password. See [setup.md](setup.md#authentication).
 
 ## The portal UI
 

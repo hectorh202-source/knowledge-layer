@@ -47,6 +47,49 @@ key.
 > expose unpublished drafts and every other tenant's data. The code refuses to
 > start if the two are set to the same value.
 
+## Authentication
+
+The portal uses Supabase Auth. With `SUPABASE_URL` and `SUPABASE_ANON_KEY` set,
+every route except `/login` and `/health` requires a session.
+
+**Create your account in the Supabase dashboard** — Authentication → Users → Add
+user. There is deliberately no signup route in the app: an admin portal that
+lets strangers enrol is not an admin portal.
+
+**Then turn signups off** — Authentication → Sign In / Providers → *Allow new
+users to sign up*. Leave the email provider itself enabled; that is what lets
+you log in.
+
+**Confirm the user.** With "Confirm email" on, an unconfirmed account is refused
+at login regardless of password. The dashboard's Add user dialog has an
+auto-confirm option; use it, or the first login fails with no obvious cause.
+
+### How the session works
+
+The access and refresh tokens live in an **httpOnly cookie**, not localStorage.
+The portal is one inline script, and a token JavaScript can read is a token any
+injected script can take.
+
+Validation **calls Supabase** rather than verifying the JWT locally, so a
+revoked session actually stops working — local verification cannot see
+revocation, and a departed employee's token would keep working until it expired.
+Validated tokens are cached for 60 seconds, so a page load is not a burst of
+auth calls but revocation still takes effect quickly.
+
+Expired access tokens refresh transparently, so a session does not end mid-task
+every hour.
+
+### Running it somewhere other than localhost
+
+```bash
+npm run portal -- --host 0.0.0.0
+```
+
+This is **refused unless Supabase is configured**. The portal edits every
+client's data and shells out to the intake tools, so exposing it is a deliberate
+act. Put TLS in front of it — the session cookie only gets its `Secure` flag
+when the request arrives over HTTPS.
+
 ## Google Cloud setup
 
 This is the fiddliest part, and the errors are unhelpful. In order:
