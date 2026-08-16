@@ -473,6 +473,13 @@ async function discoverabilityView(){
       'An engine that sees two different phone numbers has no way to know they are one business, so neither record accumulates the corroboration that earns a citation.</div></div>'+
       '<div id="napOut" class="card-b"><div class="sub" style="margin:0">Not compared yet.</div></div>'+
     '</div>'+
+    '<div class="card"><div class="card-h"><h2>Directory listings</h2>'+
+      '<button class="btn primary" id="runDirs">Check</button></div>'+
+      '<div class="card-b" style="padding-bottom:0"><div class="sub">When someone asks an assistant for the best plumber in a city, the pages it retrieves are '+
+      'overwhelmingly aggregators &mdash; Yelp, Angi, BBB. Those pages are the candidate set the answer is built from, so a business absent from them was never in the running, '+
+      'however good the markup on its own site.</div></div>'+
+      '<div id="dirsOut" class="card-b"><div class="sub" style="margin:0">Not checked yet.</div></div>'+
+    '</div>'+
     '<div class="card"><div class="card-h"><h2>Needs a person</h2><span class="meta">'+doneManual+' of '+t.manualChecks.length+' confirmed</span></div>'+
       '<div class="card-b" style="padding-bottom:0"><div class="sub">These need an account login or judgment. Unchecked means unverified, not failing.</div></div>'+
       '<table>'+manualRows+'</table></div>';
@@ -851,11 +858,43 @@ document.addEventListener("click", async e => {
     if(t.id==="copySnippet"){
       const json = $("jsonldOut").textContent;
       if(!json || json.indexOf("{")===-1){ toast("Press Generate first."); return; }
-      // Escaping the slash keeps the JSON valid while stopping </script> inside
-      // a string from closing the tag early.
+      // Escape the closing-tag sequence so a string inside the JSON cannot end
+      // the script element early. Note this comment cannot spell that sequence
+      // out: this whole file is served inside an inline script, so writing it
+      // here truncated the page and froze the portal on "Loading…".
       await navigator.clipboard.writeText(
         '<script type="application/ld+json">\n'+json.replace(/<\//g,"<\\/")+'\n<\/script>');
       toast("Snippet copied — paste it into the site's <head>.");
+      return;
+    }
+
+    if(t.id==="runDirs"){
+      const out=$("dirsOut"); out.innerHTML='<div class="sub" style="margin:0">Checking…</div>';
+      t.disabled=true;
+      let r; try { r = await api("/clients/"+current+"/directories"); } finally { t.disabled=false; }
+
+      const rows = r.entries.map(e=>
+        '<tr><td>'+(e.state==="found"
+            ? '<span class="pill ok">found</span>'
+            : '<span class="pill wait">unknown</span>')+'</td>'+
+          '<td><div class="primary">'+esc(e.name)+'</div><div class="secondary">'+esc(e.why)+'</div></td>'+
+          '<td class="meta">'+(e.state==="found"
+            ? '<a href="'+esc(e.url)+'" target="_blank" rel="noopener">open profile ↗</a>'+
+              '<div class="secondary">'+esc(e.via)+'</div>'
+            : '<a href="'+esc(e.searchUrl)+'" target="_blank" rel="noopener">search ↗</a>')+
+          '</td></tr>').join("");
+
+      out.innerHTML =
+        '<div class="banner '+(r.found>0?"warn":"bad")+'"><strong>'+r.found+' of '+r.entries.length+
+          ' confirmed.</strong> Searching '+esc(r.business)+(r.where?' in '+esc(r.where):"")+'.</div>'+
+        '<table><tr><th></th><th>Directory</th><th></th></tr>'+rows+'</table>'+
+        (r.otherProfiles.length
+          ? '<div class="sub" style="margin:.5rem 0 0">Other profile links on the site: '+
+            r.otherProfiles.map(u=>'<a href="'+esc(u)+'" target="_blank" rel="noopener">'+esc(u)+'</a>').join(", ")+'</div>'
+          : "")+
+        r.notes.map(n=>'<div class="sub" style="margin:.5rem 0 0">'+esc(n)+'</div>').join("")+
+        '<div class="sub" style="margin:.5rem 0 0"><strong>&ldquo;Unknown&rdquo; is not &ldquo;not listed&rdquo;.</strong> These platforms refuse automated '+
+        'searches &mdash; Yelp returns 403 even for profiles that exist &mdash; so reporting an absence would frequently be a lie. Each search link is about ten seconds by hand.</div>';
       return;
     }
 
@@ -960,3 +999,36 @@ $("ncGo").addEventListener("click", async () => {
 </script>
 </body>
 </html>`;
+
+/**
+ * Fails loudly at startup if the page contains more than one script element.
+ *
+ * The whole portal is one inline script, so the closing-tag sequence appearing
+ * anywhere in this file — including inside a comment, which is how it happened —
+ * truncates the script at that point. Everything after it silently vanishes.
+ *
+ * The failure gives no useful signal: the page returns 200, the API answers
+ * normally, the server logs nothing, and the portal simply sits on "Loading…"
+ * forever. Diagnosing it meant extracting the inline script and running it
+ * through a parser. A one-line assertion at boot is cheaper than doing that
+ * twice.
+ */
+function assertSingleScript(html: string): void {
+  // Only the closing sequence matters. An opening tag inside a JS string is
+  // inert — the page legitimately contains one, in the code that wraps the
+  // graph in a script tag for pasting — because an HTML parser inside a script
+  // element is looking for the close and nothing else.
+  const closes = html.split("<" + "/script>").length - 1;
+
+  if (closes !== 1) {
+    throw new Error(
+      `The admin page must contain exactly one closing script tag, found ${closes}. ` +
+        `Something in src/admin/ui.ts wrote the sequence literally — most likely in a ` +
+        `comment or a string — which truncates the page there and leaves the portal ` +
+        `stuck on "Loading…" with a healthy server and a 200 response. Split the ` +
+        `sequence, as this function does.`
+    );
+  }
+}
+
+assertSingleScript(ADMIN_HTML);

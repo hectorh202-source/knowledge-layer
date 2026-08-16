@@ -15,6 +15,7 @@ import {
   extractHubUrlCluster,
   extractMeta,
   extractPlaceIds,
+  extractProfileLinks,
   extractServices,
   pageHrefs,
 } from "./html";
@@ -181,6 +182,7 @@ export async function crawlSite(options: CrawlOptions): Promise<IntakeResult> {
     extractMeta(page.html, url, result.entity);
     extractContact(page.html, url, result.entity);
     extractPlaceIds(page.html, url, result.entity);
+    extractProfileLinks(page.html, url, result.entity);
     result.faqs.push(...extractFaqs(page.html, url));
     result.credentials.push(...extractCredentials(page.html, url));
     result.services.push(...extractServices(page.html, url));
@@ -322,6 +324,7 @@ export async function crawlSite(options: CrawlOptions): Promise<IntakeResult> {
   // whole crawl rather than per page.
   result.entity.placeId = dedupe(result.entity.placeId, (candidate) => candidate.value);
   result.entity.gbpUrl = dedupe(result.entity.gbpUrl, (candidate) => candidate.value);
+  result.entity.profiles = dedupe(result.entity.profiles, (candidate) => candidate.value);
 
   if (result.entity.placeId.length === 1) {
     result.notes.push(

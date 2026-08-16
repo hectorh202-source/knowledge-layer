@@ -16,6 +16,7 @@ import { FileSource } from "../api/source/files";
 import { MANUAL_CHECKS, runTier1Audit } from "../audit/tier1";
 import { verifyMarkup } from "../audit/verify-markup";
 import { auditNap } from "../audit/nap";
+import { auditDirectories } from "../audit/directory-presence";
 import {
   CONTENT_KINDS,
   createTenant,
@@ -447,6 +448,14 @@ export function createAdminRouter(): Router {
     }
     const result = await runScript("src/intake/run-places.ts", args);
     res.json(result);
+  });
+
+  router.get("/clients/:slug/directories", (req: Request, res: Response) => {
+    try {
+      res.json(auditDirectories(req.params.slug));
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    }
   });
 
   router.get("/clients/:slug/nap", async (req: Request, res: Response) => {

@@ -1,4 +1,5 @@
 import * as cheerio from "cheerio";
+import { directoryFor } from "../audit/directories";
 import {
   provenance,
   type CredentialCandidate,
@@ -62,6 +63,54 @@ export function extractPlaceIds(
       provenance: provenance("website", url, "Google Maps cid link in page markup", "high"),
     });
   }
+}
+
+/**
+ * Links to the business on other platforms — Yelp, BBB, Angi, Facebook.
+ *
+ * The site's own footer is better evidence of where a business is listed than
+ * any directory lookup, because the directories cannot be queried: Yelp refuses
+ * automated requests outright, and BBB and Bing render their results in
+ * JavaScript. A link the business publishes itself is also a stronger claim than
+ * one we inferred.
+ *
+ * Share and intent URLs are excluded. A "share this on Facebook" button links to
+ * facebook.com and says nothing whatever about the business having a page.
+ */
+export function extractProfileLinks(html: string, url: string, into: EntityCandidates): void {
+  const $ = cheerio.load(html);
+  const seen = new Set<string>();
+
+  $("a[href]").each((_, element) => {
+    const href = ($(element).attr("href") ?? "").trim();
+    if (!/^https?:\/\//i.test(href)) return;
+
+    const directory = directoryFor(href);
+    if (!directory) return;
+
+    // Sharing widgets, not listings.
+    if (/\/(sharer|share|intent|dialog)\b/i.test(href)) return;
+    if (/[?&](u|url|text|quote)=/i.test(href)) return;
+
+    // A bare homepage link is not a profile. Every one of these platforms puts
+    // a business at a path.
+    let pathname: string;
+    try {
+      pathname = new URL(href).pathname.replace(/\/+$/, "");
+    } catch {
+      return;
+    }
+    if (pathname === "" || pathname === "/") return;
+
+    const clean = href.split("#")[0];
+    if (seen.has(clean)) return;
+    seen.add(clean);
+
+    into.profiles.push({
+      value: clean,
+      provenance: provenance("website", url, `${directory.name} profile linked from the site`, "high"),
+    });
+  });
 }
 
 /** Phone numbers in tel: links are unambiguous; ones in body text are not. */

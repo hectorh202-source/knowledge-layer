@@ -66,6 +66,16 @@ export interface EntityCandidates {
    * the customer's own website the most reliable route to their Google profile.
    */
   placeId: Candidate<string>[];
+  /**
+   * Links to the business on other platforms, found in the site's own markup.
+   *
+   * Becomes schema.org `sameAs`, and it is the only reliable way to learn where
+   * a business is listed. The directories themselves cannot be searched — Yelp
+   * returns 403 to an automated request even for a profile that demonstrably
+   * exists, and BBB and Bing render results in JavaScript — so a business's own
+   * footer is better evidence of its listings than any directory lookup.
+   */
+  profiles: Candidate<string>[];
   hours: Candidate<{ day: number; opens: string | null; closes: string | null; isClosed: boolean }>[];
 }
 
@@ -128,6 +138,7 @@ export function emptyEntityCandidates(): EntityCandidates {
     foundedYear: [],
     gbpUrl: [],
     placeId: [],
+    profiles: [],
     hours: [],
   };
 }
