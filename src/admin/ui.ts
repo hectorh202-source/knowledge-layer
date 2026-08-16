@@ -86,15 +86,27 @@ tr:last-child td{border-bottom:0}
 .pill.bad{background:var(--badbg);color:var(--bad)}
 .banner{border:1px solid var(--line);border-left-width:4px;border-radius:8px;
   padding:.7rem .9rem;margin-bottom:.8rem;font-size:.88rem}
+/* Text left, action right. Without this the button sits inline at the end of a
+   sentence, so its position moves with the copy — which changes between the
+   waiting and idle states of the same banner. */
+.banner.split{display:flex;align-items:center;justify-content:space-between;gap:1rem}
+.banner.split .btn{flex:none}
 .banner.ok{border-left-color:var(--ok);background:var(--okbg)}
 .banner.warn{border-left-color:var(--warn);background:var(--warnbg)}
 .banner.bad{border-left-color:var(--bad);background:var(--badbg)}
+/* Every button is the accent colour. The primary class is kept as a no-op so
+   existing markup still reads correctly and nothing had to be rewritten.
+   No backticks in here: this stylesheet lives inside a template literal. */
 button.btn{font:inherit;font-size:.83rem;padding:.4rem .75rem;border-radius:7px;
-  border:1px solid var(--line);background:var(--panel);color:var(--ink);cursor:pointer}
-button.btn:hover{border-color:var(--accent)}
+  border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer}
+button.btn:hover{filter:brightness(1.1)}
 button.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
-button.btn.danger{color:var(--bad)}
-button.btn:disabled{opacity:.5;cursor:not-allowed}
+/* Destructive actions stay outlined and red. With everything else solid blue,
+   a quiet red button is both unmistakable and — correctly — less inviting to
+   press than the action you actually came to perform. */
+button.btn.danger{background:var(--panel);border-color:var(--line);color:var(--bad)}
+button.btn.danger:hover{border-color:var(--bad);filter:none}
+button.btn:disabled{opacity:.5;cursor:not-allowed;filter:none}
 .row{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center}
 input,select,textarea{font:inherit;font-size:.87rem;padding:.42rem .55rem;border-radius:7px;
   border:1px solid var(--line);background:var(--bg);color:var(--ink);width:100%}
@@ -517,16 +529,16 @@ function overviewView(){
   const t = s.tier1;
   return '<h1>'+esc(s.name)+'</h1><div class="sub">'+esc(s.domain||"no domain set")+'</div>'+
     (!t || !t.ran
-      ? '<div class="banner warn"><strong>Discoverability not checked.</strong> Until it is, there is no evidence AI can reach this site at all. <button class="btn" data-goto="discoverability" style="margin-left:.4rem">Check now</button></div>'
+      ? '<div class="banner split warn"><span><strong>Discoverability not checked.</strong> Until it is, there is no evidence AI can reach this site at all.</span><button class="btn" data-goto="discoverability">Check now</button></div>'
       : t.failed>0
-        ? '<div class="banner bad"><strong>'+t.failed+' discoverability check'+(t.failed===1?"":"s")+' failing.</strong> These block being found. <button class="btn" data-goto="discoverability" style="margin-left:.4rem">Review</button></div>'
+        ? '<div class="banner split bad"><span><strong>'+t.failed+' discoverability check'+(t.failed===1?"":"s")+' failing.</strong> These block being found.</span><button class="btn" data-goto="discoverability">Review</button></div>'
         : t.complete ? '<div class="banner ok"><strong>Tier 1 complete.</strong> Ready for Tier 2.</div>' : "")+
     (s.blockingCount>0? '<div class="banner bad"><strong>'+s.blockingCount+' blocking gap'+(s.blockingCount===1?"":"s")+
       ' in the business profile.</strong> The API serves no business record and the catalog will not publish until these are filled.</div>':"")+
     ((detail.pendingIntake&&detail.pendingIntake.total>0)
-      ? '<div class="banner warn"><strong>'+detail.pendingIntake.total+' extracted candidate'+
-        (detail.pendingIntake.total===1?"":"s")+' not yet promoted.</strong> They stay out of the sections until you do. '+
-        '<button class="btn" data-goto="sources" style="margin-left:.4rem">Go to Sources</button></div>'
+      ? '<div class="banner split warn"><span><strong>'+detail.pendingIntake.total+' extracted candidate'+
+        (detail.pendingIntake.total===1?"":"s")+' not yet promoted.</strong> They stay out of the sections until you do.</span>'+
+        '<button class="btn" data-goto="sources">Go to Sources</button></div>'
       : "")+
     (pending>0? '<div class="banner warn"><strong>'+pending+' item'+(pending===1?"":"s")+' awaiting approval.</strong> Nothing extracted reaches an answer engine until someone confirms it.</div>':"")+
     (detail.expiredCredentials>0? '<div class="banner bad"><strong>'+detail.expiredCredentials+' expired credential(s) approved.</strong> Never served, but worth removing.</div>':"")+
@@ -594,59 +606,76 @@ function sourcesView(){
     .map(([k,v])=>v+" "+(LABELS[k]||k).toLowerCase());
 
   return '<h1>Sources</h1><div class="sub">The website first, then Google, then you. Everything extracted arrives unapproved.</div>'+
-  (p.total>0
-    ? '<div class="banner warn"><strong>'+p.total+' candidate'+(p.total===1?"":"s")+' waiting to be promoted'+
-      (parts.length?' — '+esc(parts.join(", ")):"")+'.</strong> A crawl only writes candidates; '+
-      'until you promote them the sections stay empty. '+
-      '<button class="btn primary" data-run="promote" style="margin-left:.4rem">Promote now</button></div>'
-    : "")+
+
+  // Promoting is a banner at the top rather than a third card at the bottom.
+  // It renders unconditionally: the count covers content items only, and a
+  // Google pull returns hours, phone and address with nothing to count while
+  // still needing to be promoted. Rendering it only when the count is non-zero
+  // would leave that data stranded with nothing on screen offering to move it.
+  '<div class="banner split '+(p.total>0?"warn":"")+'"><span>'+
+    (p.total>0
+      ? '<strong>'+p.total+' candidate'+(p.total===1?"":"s")+' waiting to be promoted'+
+        (parts.length?' &mdash; '+esc(parts.join(", ")):"")+'.</strong> A crawl only writes candidates; until you promote them the '+
+        'sections stay empty. Nothing a person entered is overwritten &mdash; conflicts are reported instead.'
+      : '<strong>Promote after every source.</strong> Nothing new is counted right now, but a Google pull returns hours, phone and address '+
+        'with no items to count, and those still need promoting.')+
+    '</span><button class="btn primary" data-run="promote">Promote</button></div>'+
+  // Each source's configuration sits in that source's card. It used to live on
+  // the Settings page, which meant a crawl that missed the services page sent
+  // you to another screen to paste a URL and back again — the field you needed
+  // as far as possible from the button you were pressing.
   '<div class="card"><div class="card-h"><h2>1 &nbsp;Website</h2><span class="meta">run this first</span></div><div class="card-b">'+
-    '<div class="sub" style="margin:0 0 .7rem">Crawls the domain, respecting robots.txt. Prefers structured data the site already publishes.</div>'+
-    '<div class="sub" style="margin:0 0 .7rem">It also looks for the client&rsquo;s Google place ID in their own markup &mdash; embedded maps and review widgets '+
-    'usually carry it. That is why this runs before Google Places: for a service-area business the ID is the only way in, and the site is the most '+
-    'reliable place to get it.</div>'+
-    (S.googlePlaceId
-      ? '<div class="sub" style="margin:0 0 .7rem">Place ID already saved in Settings, so Google Places will use that.</div>'
-      : "")+
+    '<div class="sub" style="margin:0 0 .7rem">Crawls the domain, respecting robots.txt. Prefers structured data the site already publishes. '+
+    'It also picks up the client&rsquo;s Google place ID from their own markup &mdash; embedded maps and review widgets carry it &mdash; which is why this runs first: '+
+    'for a service-area business that ID is the only way into Google.</div>'+
+    '<label class="f"><span>Services page URL'+
+      (S.servicesPageUrl?' &nbsp;<a href="'+esc(S.servicesPageUrl)+'" target="_blank" rel="noopener">open ↗</a>':"")+
+      '</span><input data-src="servicesPageUrl" value="'+esc(S.servicesPageUrl||"")+'" placeholder="https://'+esc(detail.settings.domain)+'/what-we-do"></label>'+
+    '<label class="f"><span>Service areas page URL'+
+      (S.serviceAreasPageUrl?' &nbsp;<a href="'+esc(S.serviceAreasPageUrl)+'" target="_blank" rel="noopener">open ↗</a>':"")+
+      '</span><input data-src="serviceAreasPageUrl" value="'+esc(S.serviceAreasPageUrl||"")+'" placeholder="https://'+esc(detail.settings.domain)+'/coverage"></label>'+
+    '<div class="sub" style="margin:0 0 .7rem">Optional, and saved as you type. Point the extractor straight at the right pages when the site words things its own way &mdash; '+
+    'a site saying &quot;What We Do&quot; instead of &quot;Services&quot; finds nothing otherwise. Leave blank to fall back to the heuristics.</div>'+
     '<button class="btn primary" data-run="website">Crawl website</button></div></div>'+
-  '<div class="card"><div class="card-h"><h2>2 &nbsp;Google Places</h2><span class="meta">needs a place ID</span></div>'+
+  '<div class="card"><div class="card-h"><h2>2 &nbsp;Google Places</h2>'+
+    '<span class="meta">'+(S.googlePlaceId?"place ID set":"needs a place ID")+'</span></div>'+
     '<div class="card-b"><div class="sub" style="margin:0 0 .7rem">Hours, phone and address from public Google data using your own API key. Google permits storing place_id only, so treat the rest as a suggestion the owner confirms.</div>'+
-    '<div class="sub" style="margin:0 0 .7rem">Uses the place ID from Settings, or one the crawl found. There is no search &mdash; Google returns no '+
-    'service-area business from any lookup endpoint, and that is most home-services clients. Without an ID, enter the business by hand.</div>'+
+    '<label class="f"><span>Google place ID'+
+      (S.googlePlaceId?' &nbsp;<a href="https://www.google.com/maps/place/?q=place_id:'+encodeURIComponent(S.googlePlaceId)+'" target="_blank" rel="noopener">open ↗</a>':"")+
+      '</span><input data-src="googlePlaceId" value="'+esc(S.googlePlaceId||"")+'" placeholder="ChIJ… or paste any Google link containing one"></label>'+
+    '<div class="sub" style="margin:0 0 .7rem">The only way in. There is <strong>no search</strong> &mdash; Google returns no service-area business from any lookup endpoint, '+
+    'so a live, verified, well-reviewed listing can be unfindable by name or phone, and that describes most home-services clients.</div>'+
+    '<div class="sub" style="margin:0 0 .7rem">The crawl above fills this in when the site carries it. Otherwise ask the client for their <strong>Google review link</strong> '+
+    'and paste the whole thing &mdash; the ID is extracted. A <code>cid=</code> link will not do: different identifier, not convertible. Without an ID, enter the business by hand.</div>'+
     '<button class="btn primary" data-run="places">Pull from Google</button></div></div>'+
-  '<div class="card"><div class="card-h"><h2>3 &nbsp;Promote into content</h2>'+
-    (p.total>0?'<span class="pill wait">'+p.total+' waiting</span>':"")+'</div><div class="card-b">'+
-    '<div class="sub" style="margin:0 0 .7rem"><strong>Required.</strong> Crawling only writes candidates to an intake file — '+
-    'this is the step that puts them into Services, Q&amp;A and the rest. Combines every source, and never '+
-    'overwrites a value a person entered; conflicts are reported instead.</div>'+
-    '<button class="btn primary" data-run="promote">Promote candidates</button></div></div>'+
   '<div class="card"><div class="card-h"><h2>Output</h2></div><pre id="runOut">Run a source to see its output.</pre></div>';
 }
 
 function publishingView(){
   return '<h1>Publishing</h1><div class="sub">What leaves this system, and where it goes.</div>'+
-  '<div class="card"><div class="card-h"><h2>schema.org JSON-LD</h2>'+
-    '<div class="row"><button class="btn" id="loadJsonld">Generate</button><button class="btn" id="copyJsonld">Copy</button></div></div>'+
-    '<div class="card-b"><div class="sub" style="margin:0 0 .7rem">Works today with Google and every AI crawler. Goes in the page head, or is fetched live from <code>/jsonld</code>.</div>'+
+  // One card, because it is one task in three steps. Two cards meant two Copy
+  // buttons — raw JSON and the same JSON wrapped in a script tag — where only
+  // the wrapped one is ever what you want, since that is what gets pasted and
+  // both validators accept it.
+  '<div class="card"><div class="card-h"><h2>schema.org markup</h2>'+
+    '<div class="row"><button class="btn" id="loadJsonld">1 Generate</button>'+
+    '<button class="btn" id="copySnippet">2 Copy snippet</button>'+
+    '<button class="btn primary" id="verifyMarkup">3 Check the live site</button></div></div>'+
+    '<div class="card-b" style="padding-bottom:0">'+
+    '<div class="sub">Generate, paste into the site&rsquo;s <strong>&lt;head&gt;</strong>, then check it arrived. '+
+    'Every CMS has a field for it &mdash; WordPress: theme header or an SEO plugin&rsquo;s header-code box. '+
+    'Squarespace: Settings &rarr; Advanced &rarr; Code Injection. Wix: Settings &rarr; Custom Code. Webflow: Project Settings &rarr; Custom Code.</div>'+
+    '<div class="sub"><strong>A pasted snippet goes stale.</strong> Correct the day it is pasted and drifting from then on &mdash; hours change here, '+
+    'nobody re-pastes, and the site serves last quarter&rsquo;s answer while this portal looks perfectly healthy. Run step 3 after pasting, and again '+
+    'whenever the profile changes.</div></div>'+
+    '<div class="card-b">'+
     '<div id="jsonldIssues"></div>'+
     '<pre id="jsonldOut">Not generated yet.</pre>'+
-    '<div class="sub" style="margin:.7rem 0 0">Checked against the schema.org vocabulary on every generate &mdash; a property on the wrong type is dropped silently by crawlers, '+
-    'so nothing else would tell you. Neither official validator has an API, so spot-check occasionally: '+
-    '<a href="https://validator.schema.org/" target="_blank" rel="noopener">Schema Markup Validator &#8599;</a> &middot; '+
-    '<a href="https://search.google.com/test/rich-results" target="_blank" rel="noopener">Rich Results Test &#8599;</a> &mdash; press Copy first.</div>'+
-    '</div></div>'+
-
-  '<div class="card"><div class="card-h"><h2>Get it onto the site</h2>'+
-    '<div class="row"><button class="btn" id="copySnippet">Copy snippet</button>'+
-    '<button class="btn primary" id="verifyMarkup">Check the live site</button></div></div>'+
-    '<div class="card-b">'+
-    '<div class="sub" style="margin:0 0 .7rem">Press Generate above, then Copy snippet, and paste it into the site&rsquo;s '+
-    '<strong>&lt;head&gt;</strong> &mdash; every CMS has a field for this. WordPress: theme header or an SEO plugin&rsquo;s header-code box. '+
-    'Squarespace: Settings &rarr; Advanced &rarr; Code Injection. Wix: Settings &rarr; Custom Code. Webflow: Project Settings &rarr; Custom Code.</div>'+
-    '<div class="sub" style="margin:0 0 .7rem"><strong>A pasted snippet goes stale.</strong> It is correct the day it is pasted and drifts from then on &mdash; '+
-    'hours change here, nobody re-pastes, and the site keeps serving last quarter&rsquo;s answer while this portal looks perfectly healthy. '+
-    'That is what the check is for. Run it after pasting, and again whenever the profile changes.</div>'+
     '<div id="verifyOut"></div>'+
+    '<div class="sub" style="margin:.7rem 0 0">Validated against the schema.org vocabulary on every generate &mdash; a property on the wrong type is '+
+    'dropped silently by crawlers, so nothing else would tell you. Neither official validator has an API, so spot-check occasionally with '+
+    '<a href="https://validator.schema.org/" target="_blank" rel="noopener">Schema Markup Validator &#8599;</a> or '+
+    '<a href="https://search.google.com/test/rich-results" target="_blank" rel="noopener">Rich Results Test &#8599;</a>. Both accept the copied snippet.</div>'+
     '</div></div>'+
 
   '<div class="card"><div class="card-h"><h2>Database</h2></div><div class="card-b">'+
@@ -669,25 +698,9 @@ function settingsView(){
       '<input data-s="apiBaseUrl" value="'+esc(s.apiBaseUrl)+'" placeholder="https://api.'+esc(s.domain)+'"></label>'+
   '</div></div>'+
 
-  '<div class="card"><div class="card-h"><h2>Content sources</h2></div><div class="card-b">'+
-    '<div class="sub">Point the extractor straight at the right pages. More accurate than guessing '+
-    'at URL conventions — a site that says &quot;What We Do&quot; instead of &quot;Services&quot; finds nothing otherwise. '+
-    'Leave blank to fall back to the heuristics.</div>'+
-    '<label class="f"><span>Services page URL'+
-      (S.servicesPageUrl?' &nbsp;<a href="'+esc(S.servicesPageUrl)+'" target="_blank" rel="noopener">open ↗</a>':"")+
-      '</span><input data-src="servicesPageUrl" value="'+esc(S.servicesPageUrl||"")+'" placeholder="https://'+esc(s.domain)+'/what-we-do"></label>'+
-    '<label class="f"><span>Service areas page URL'+
-      (S.serviceAreasPageUrl?' &nbsp;<a href="'+esc(S.serviceAreasPageUrl)+'" target="_blank" rel="noopener">open ↗</a>':"")+
-      '</span><input data-src="serviceAreasPageUrl" value="'+esc(S.serviceAreasPageUrl||"")+'" placeholder="https://'+esc(s.domain)+'/coverage"></label>'+
-    '<label class="f"><span>Google place ID'+
-      (S.googlePlaceId?' &nbsp;<a href="https://www.google.com/maps/place/?q=place_id:'+encodeURIComponent(S.googlePlaceId)+'" target="_blank" rel="noopener">open ↗</a>':"")+
-      '</span><input data-src="googlePlaceId" value="'+esc(S.googlePlaceId||"")+'" placeholder="ChIJ… or paste any Google link containing one"></label>'+
-    '<div class="sub" style="margin:.2rem 0 0">The only way Places intake can reach a listing. Google returns no service-area business from any lookup '+
-    'endpoint, so a live, verified, well-reviewed listing can still be unfindable by name or phone &mdash; and that describes most home-services clients.</div>'+
-    '<div class="sub" style="margin:.35rem 0 0">The website crawl fills this in automatically when the site embeds a map, a directions link or a review widget, '+
-    'since those all carry the ID. Otherwise ask the client for their <strong>Google review link</strong> and paste the whole thing here. '+
-    'A <code>cid=</code> link will not do &mdash; different identifier, not convertible.</div>'+
-  '</div></div>'+
+  // Content sources used to live here, one page away from the buttons that
+  // consume them. Each field belongs to exactly one source, so each now sits
+  // in that source's card — see sourcesView.
 
   '<div class="card"><div class="card-h"><h2>Accounts &amp; access</h2></div><div class="card-b">'+
     '<div class="sub">Where this client\'s infrastructure lives. Ownership matters more than the links: '+
@@ -920,7 +933,8 @@ document.addEventListener("click", async e => {
       const body={links:{}};
       document.querySelectorAll("[data-s]").forEach(el=>body[el.dataset.s]=el.value);
       document.querySelectorAll("[data-l]").forEach(el=>body.links[el.dataset.l]=el.value.trim());
-      body.sources={}; document.querySelectorAll("[data-src]").forEach(el=>body.sources[el.dataset.src]=el.value.trim());
+      // Source config is not on this page any more; it saves on blur from the
+      // Sources cards where it lives.
       await api("/clients/"+current+"/settings",{method:"PATCH",body:JSON.stringify(body)});
       toast("Settings saved."); await refresh(); return;
     }
@@ -1068,9 +1082,6 @@ document.addEventListener("click", async e => {
       return;
     }
 
-    if(t.id==="copyJsonld"){
-      await navigator.clipboard.writeText($("jsonldOut").textContent); toast("Copied."); return;
-    }
   }catch(err){ toast(err.message); }
 });
 
@@ -1085,6 +1096,28 @@ document.addEventListener("change", async e => {
 });
 
 $("ncCancel").addEventListener("click", closeNewClient);
+
+/**
+ * Source configuration saves on blur.
+ *
+ * These fields live beside the button that consumes them, so a Save button per
+ * card would be friction on a single input. Saving only when Crawl is pressed
+ * would silently lose an edit made and then navigated away from, which is worse
+ * than either.
+ */
+document.addEventListener("change", async e => {
+  const el = e.target;
+  if(!el.dataset || !el.dataset.src || !current) return;
+
+  const sources = {};
+  document.querySelectorAll("[data-src]").forEach(f => sources[f.dataset.src] = f.value.trim());
+
+  try{
+    await api("/clients/"+current+"/settings",{method:"PATCH",body:JSON.stringify({sources})});
+    detail.settings.sources = sources;
+    toast("Saved.");
+  }catch(err){ toast(err.message); }
+});
 
 $("pickSearch").addEventListener("input", renderPickList);
 $("pickCancel").addEventListener("click", ()=>$("clientPicker").close());
