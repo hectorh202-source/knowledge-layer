@@ -520,6 +520,20 @@ function publishingView(){
     '<a href="https://validator.schema.org/" target="_blank" rel="noopener">Schema Markup Validator &#8599;</a> &middot; '+
     '<a href="https://search.google.com/test/rich-results" target="_blank" rel="noopener">Rich Results Test &#8599;</a> &mdash; press Copy first.</div>'+
     '</div></div>'+
+
+  '<div class="card"><div class="card-h"><h2>Get it onto the site</h2>'+
+    '<div class="row"><button class="btn" id="copySnippet">Copy snippet</button>'+
+    '<button class="btn primary" id="verifyMarkup">Check the live site</button></div></div>'+
+    '<div class="card-b">'+
+    '<div class="sub" style="margin:0 0 .7rem">Press Generate above, then Copy snippet, and paste it into the site&rsquo;s '+
+    '<strong>&lt;head&gt;</strong> &mdash; every CMS has a field for this. WordPress: theme header or an SEO plugin&rsquo;s header-code box. '+
+    'Squarespace: Settings &rarr; Advanced &rarr; Code Injection. Wix: Settings &rarr; Custom Code. Webflow: Project Settings &rarr; Custom Code.</div>'+
+    '<div class="sub" style="margin:0 0 .7rem"><strong>A pasted snippet goes stale.</strong> It is correct the day it is pasted and drifts from then on &mdash; '+
+    'hours change here, nobody re-pastes, and the site keeps serving last quarter&rsquo;s answer while this portal looks perfectly healthy. '+
+    'That is what the check is for. Run it after pasting, and again whenever the profile changes.</div>'+
+    '<div id="verifyOut"></div>'+
+    '</div></div>'+
+
   '<div class="card"><div class="card-h"><h2>Database</h2></div><div class="card-b">'+
     '<div class="sub" style="margin:0 0 .7rem">Pushes approved content to Supabase. Publishing the profile is a separate, deliberate act.</div>'+
     '<div class="row"><button class="btn" data-db="dry">Dry run</button>'+
@@ -828,6 +842,45 @@ document.addEventListener("click", async e => {
       else if(r.warnings.length) toast(r.warnings[0]);
       return;
     }
+    if(t.id==="copySnippet"){
+      const json = $("jsonldOut").textContent;
+      if(!json || json.indexOf("{")===-1){ toast("Press Generate first."); return; }
+      // Escaping the slash keeps the JSON valid while stopping </script> inside
+      // a string from closing the tag early.
+      await navigator.clipboard.writeText(
+        '<script type="application/ld+json">\n'+json.replace(/<\//g,"<\\/")+'\n<\/script>');
+      toast("Snippet copied — paste it into the site's <head>.");
+      return;
+    }
+
+    if(t.id==="verifyMarkup"){
+      const out=$("verifyOut"); out.innerHTML='<div class="sub">Reading the live site…</div>';
+      t.disabled=true;
+      let r;
+      try { r = await api("/clients/"+current+"/verify-markup"); }
+      finally { t.disabled=false; }
+
+      const banner={current:"ok",stale:"warn",foreign:"bad",missing:"bad"}[r.status];
+      const head={current:"Live and current.",stale:"Installed, but out of date.",
+                  foreign:"Business markup found, but none of it is ours.",
+                  missing:"Not installed."}[r.status];
+
+      out.innerHTML =
+        '<div class="banner '+banner+'"><strong>'+esc(head)+'</strong> '+
+          esc(r.url)+' — '+r.blocksFound+' JSON-LD block'+(r.blocksFound===1?"":"s")+' on the page.</div>'+
+        (r.differences.length
+          ? '<table><tr><th>Field</th><th>In the portal</th><th>On the site</th></tr>'+
+            r.differences.map(d=>'<tr><td class="primary">'+esc(d.field)+'</td><td>'+esc(d.ours)+
+              '</td><td class="meta">'+esc(d.theirs)+'</td></tr>').join("")+'</table>'
+          : "")+
+        (r.foreignBusinessNodes.length
+          ? '<div class="sub" style="margin:.5rem 0 0">Other business nodes on the page: '+
+            r.foreignBusinessNodes.map(esc).join("; ")+'</div>'
+          : "")+
+        r.notes.map(n=>'<div class="sub" style="margin:.5rem 0 0">'+esc(n)+'</div>').join("");
+      return;
+    }
+
     if(t.id==="copyJsonld"){
       await navigator.clipboard.writeText($("jsonldOut").textContent); toast("Copied."); return;
     }
