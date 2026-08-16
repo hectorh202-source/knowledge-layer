@@ -432,6 +432,12 @@ export class SupabaseStorage implements Storage {
     const address = (profile.address ?? {}) as Record<string, unknown>;
     const geo = (profile.geo ?? null) as { latitude?: number; longitude?: number } | null;
 
+    // The raw profile is whatever is in the editor, placeholders included. Text
+    // columns tolerate a stray "TODO"; typed ones reject it and take the whole
+    // save down with them, which is how the hours bug surfaced.
+    const num = (value: unknown): number | null =>
+      typeof value === "number" && Number.isFinite(value) ? value : null;
+
     await this.rest(`business_profile?on_conflict=tenant_id`, {
       method: "POST",
       headers: { Prefer: "resolution=merge-duplicates,return=representation" },
@@ -449,7 +455,7 @@ export class SupabaseStorage implements Storage {
         postal_code: address.postalCode ?? null,
         country: address.country ?? "US",
         gbp_url: profile.gbpUrl ?? null,
-        founded_year: profile.foundedYear ?? null,
+        founded_year: num(profile.foundedYear),
         primary_category: profile.primaryCategory ?? null,
         business_type: profile.businessType ?? "storefront",
         schema_type: profile.schemaType ?? "LocalBusiness",
@@ -462,10 +468,10 @@ export class SupabaseStorage implements Storage {
         payment_accepted: profile.paymentAccepted ?? [],
         currencies_accepted: profile.currenciesAccepted ?? null,
         languages: profile.languages ?? [],
-        geo_latitude: geo?.latitude ?? null,
-        geo_longitude: geo?.longitude ?? null,
+        geo_latitude: num(geo?.latitude),
+        geo_longitude: num(geo?.longitude),
         has_map: profile.hasMap ?? null,
-        number_of_employees: profile.numberOfEmployees ?? null,
+        number_of_employees: num(profile.numberOfEmployees),
         awards: profile.awards ?? [],
         member_of: profile.memberOf ?? [],
         founder: profile.founder ?? null,
@@ -482,24 +488,44 @@ export class SupabaseStorage implements Storage {
       body: JSON.stringify({ name: profile.name ?? slug }),
     });
 
-    const hours = Array.isArray(profile.hours) ? profile.hours : [];
-    if (hours.length > 0) {
-      await this.rest(`business_hours?on_conflict=tenant_id,day_of_week`, {
-        method: "POST",
-        headers: { Prefer: "resolution=merge-duplicates,return=representation" },
-        body: JSON.stringify(
-          (hours as { day: number; opens: string | null; closes: string | null; isClosed: boolean }[]).map(
-            (h) => ({
-              tenant_id: id,
-              day_of_week: h.day,
-              opens: h.opens,
-              closes: h.closes,
-              is_closed: h.isClosed,
-            })
-          )
-        ),
-      });
-    }
+    await this.writeHours(id, Array.isArray(profile.hours) ? profile.hours : []);
+  }
+
+  /**
+   * The week, cleaned to what Postgres will accept as a `time`.
+   *
+   * The same rule `parseHours` applies when reading a profile: a value that is
+   * not HH:MM is not a time, and a day that is neither closed nor timed is
+   * unknown rather than open. The unfilled template is full of literal "TODO"
+   * strings in exactly these fields, and sending one to a `time` column fails
+   * the whole profile save with a type error.
+   *
+   * Rows are replaced rather than merged, so removing a day's hours in the
+   * portal actually removes them instead of leaving yesterday's answer behind.
+   */
+  private async writeHours(tenantId: string, raw: unknown[]): Promise<void> {
+    const time = (value: unknown): string | null =>
+      typeof value === "string" && /^\d{2}:\d{2}(:\d{2})?$/.test(value.trim())
+        ? trimSeconds(value.trim())
+        : null;
+
+    const rows = raw.flatMap((entry) => {
+      const h = (entry ?? {}) as Record<string, unknown>;
+      const day = typeof h.day === "number" ? h.day : null;
+      if (day === null || day < 0 || day > 6) return [];
+
+      const isClosed = h.isClosed === true;
+      const opens = isClosed ? null : time(h.opens);
+      const closes = isClosed ? null : time(h.closes);
+      if (!isClosed && (!opens || !closes)) return [];
+
+      return [{ tenant_id: tenantId, day_of_week: day, opens, closes, is_closed: isClosed }];
+    });
+
+    await this.rest(`business_hours?tenant_id=eq.${tenantId}`, { method: "DELETE" });
+    if (rows.length === 0) return;
+
+    await this.rest(`business_hours`, { method: "POST", body: JSON.stringify(rows) });
   }
 
   // --- content ---------------------------------------------------------------
