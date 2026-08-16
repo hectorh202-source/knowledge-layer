@@ -145,6 +145,42 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
   box-shadow:0 8px 26px rgba(0,0,0,.16);opacity:0;transform:translateY(8px);
   transition:.18s;pointer-events:none;max-width:380px;z-index:99}
 #toast.show{opacity:1;transform:none}
+
+/* Every request, however small, moves this. The portal used to sit visually
+   still between a click and its re-render — against a database that is a real
+   pause, and a still screen reads as a click that missed. */
+#progress{position:fixed;top:0;left:0;right:0;height:2px;z-index:200;
+  background:transparent;overflow:hidden;opacity:0;transition:opacity .15s}
+#progress.on{opacity:1}
+#progress::after{content:"";position:absolute;inset:0;width:40%;
+  background:var(--accent);animation:slide 1.1s ease-in-out infinite}
+@keyframes slide{0%{left:-40%}100%{left:100%}}
+
+/* A button mid-action. Kept the same width as its resting state so a row of
+   buttons does not jump sideways the moment one is pressed. */
+.btn .spin{display:inline-block;width:.62rem;height:.62rem;margin-right:.35rem;
+  border:2px solid currentColor;border-right-color:transparent;border-radius:50%;
+  vertical-align:-1px;animation:spin .6s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* Optimistic rows. The change is already on screen; this says it is not
+   confirmed yet, without moving anything. */
+tr.pending{opacity:.55}
+tr.pending .btn{pointer-events:none}
+
+/* The long jobs — a crawl, a promote, a database load. Dismissable on
+   purpose: a crawl runs for minutes and there is no reason to hold someone
+   hostage to it. Hiding leaves the work running and the top bar moving. */
+#busy{position:fixed;inset:0;z-index:150;display:none;align-items:center;justify-content:center;
+  background:rgba(0,0,0,.45)}
+#busy.on{display:flex}
+#busy .box{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+  padding:1.1rem 1.2rem;max-width:420px;width:90%;box-shadow:0 18px 50px rgba(0,0,0,.28)}
+#busy h3{font-size:.98rem;margin:0 0 .3rem;display:flex;align-items:center;gap:.5rem}
+#busy .ring{width:.85rem;height:.85rem;border:2px solid var(--accent);
+  border-right-color:transparent;border-radius:50%;animation:spin .6s linear infinite;flex:none}
+#busy p{font-size:.83rem;color:var(--muted);margin:0 0 .9rem;line-height:1.45}
+#busy .dlg-f{padding:0;border:0}
 @media(max-width:820px){.app{grid-template-columns:1fr}aside{position:static;height:auto}
   main{padding:1.2rem}.cols2{grid-template-columns:1fr}}
 </style>
@@ -194,6 +230,16 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
     <button class="btn primary" type="button" id="ncGo">Create</button>
   </div>
 </dialog>
+
+<div id="progress"></div>
+
+<div id="busy">
+  <div class="box">
+    <h3><span class="ring"></span><span id="busyTitle">Working</span></h3>
+    <p id="busyText"></p>
+    <div class="dlg-f"><button class="btn quiet" type="button" id="busyHide">Hide &mdash; keep it running</button></div>
+  </div>
+</div>
 
 <div id="toast"></div>
 
@@ -246,12 +292,59 @@ const $ = id => document.getElementById(id);
 function toast(msg,ms=3200){const t=$("toast");t.textContent=msg;t.classList.add("show");
   clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove("show"),ms);}
 
-async function api(path,opts){
-  const r = await fetch("/admin/api"+path,{headers:{"Content-Type":"application/json"},...opts});
-  const body = await r.json().catch(()=>({}));
-  if(!r.ok) throw new Error(body.error||("HTTP "+r.status));
-  return body;
+/**
+ * Requests in flight, and the bar that shows them.
+ *
+ * A counter rather than a boolean: several requests overlap routinely, and a
+ * boolean lets the first one to finish switch the indicator off while the rest
+ * are still running.
+ */
+let inFlight = 0;
+function flight(delta){
+  inFlight = Math.max(0, inFlight + delta);
+  $("progress").classList.toggle("on", inFlight > 0);
 }
+
+async function api(path,opts){
+  flight(1);
+  try{
+    const r = await fetch("/admin/api"+path,{headers:{"Content-Type":"application/json"},...opts});
+    const body = await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(body.error||("HTTP "+r.status));
+    return body;
+  } finally { flight(-1); }
+}
+
+/**
+ * A button, while its action runs.
+ *
+ * Returns the restore function. The label is replaced rather than merely
+ * disabled because a greyed-out button says "you cannot do this" where a
+ * spinner says "this is happening" — and they are different messages.
+ */
+function working(btn, label){
+  if(!btn) return ()=>{};
+  const html = btn.innerHTML, wide = btn.offsetWidth;
+  btn.style.minWidth = wide + "px";
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span>' + esc(label || btn.textContent.trim());
+  return () => { btn.disabled = false; btn.innerHTML = html; btn.style.minWidth = ""; };
+}
+
+/**
+ * The blocking-but-dismissable overlay, for work measured in seconds.
+ *
+ * Hiding does not cancel: the request has already left, and offering a Cancel
+ * that only hides the box would be a lie about what it does. The top bar keeps
+ * moving, and the result still lands when it lands.
+ */
+function busy(title, text){
+  $("busyTitle").textContent = title;
+  $("busyText").textContent = text || "";
+  $("busy").classList.add("on");
+  return () => $("busy").classList.remove("on");
+}
+$("busyHide").addEventListener("click", ()=>$("busy").classList.remove("on"));
 
 async function loadClients(){
   const r = await api("/clients");
@@ -261,10 +354,28 @@ async function loadClients(){
   renderNav();
 }
 
-async function openClient(slug,section){
-  current = slug; view = validView(section) ? section : "overview";
-  detail = await api("/clients/"+slug);
-  syncLocation(); renderNav(); render();
+/**
+ * Load a client and show them.
+ *
+ * The main pane says so while it happens. Loading a client is a database read
+ * of everything they have, and leaving the previous client's page on screen
+ * throughout meant the only sign anything had happened was the page changing
+ * several seconds later — or, if it failed, never.
+ */
+async function openClient(slug,section,btn){
+  const done = working(btn, "Opening");
+  const name = (clients.find(c=>c.slug===slug)||{}).name || slug;
+  $("main").innerHTML = '<div class="empty"><span class="spin" style="border-color:var(--muted);'+
+    'border-right-color:transparent"></span> Loading '+esc(name)+'…</div>';
+  try{
+    detail = await api("/clients/"+slug);
+    current = slug; view = validView(section) ? section : "overview";
+    syncLocation(); renderNav(); render();
+  }catch(err){
+    // Leave the previous client selected. Half-switching to a client that
+    // failed to load is a worse place to be than not having switched.
+    render(); toast("Could not open "+name+" — "+err.message);
+  } finally { done(); }
 }
 
 /** Red when the profile is incomplete or discoverability is failing — both block being found. */
@@ -361,7 +472,7 @@ function directoriesCard(){
 function contentView(kind){
   const sec = detail.sections.find(s=>s.kind===kind);
   const rows = sec.items.map(it=>
-    '<tr><td>'+statusPill(it)+'</td><td><div class="primary">'+esc(it.primary)+'</div>'+
+    '<tr'+(it._pending?' class="pending"':'')+'><td>'+statusPill(it)+'</td><td><div class="primary">'+esc(it.primary)+'</div>'+
     (it.secondary?'<div class="secondary">'+esc(it.secondary)+'</div>':"")+'</td>'+
     '<td class="meta">'+esc(it.source)+' <span class="conf-'+esc(it.confidence)+'">'+esc(it.confidence)+'</span></td>'+
     '<td class="meta"><div class="toggle">'+
@@ -891,7 +1002,44 @@ async function render(){
   else m.innerHTML = contentView(view);
 }
 
-async function refresh(){ detail = await api("/clients/"+current); await loadClients(); renderNav(); await render(); }
+/**
+ * Re-read everything for the current client.
+ *
+ * For anything that changes what exists — adding, deleting, a crawl, a
+ * promote. Not for approve and publish: those know exactly what changed and
+ * update in place, and running this after every toggle meant two requests and
+ * a full re-render to move one checkbox.
+ *
+ * The two reads are independent, so they go together. Sequentially they were
+ * two round trips deep, and against a database that is the difference between
+ * a pause you notice and one you do not.
+ */
+async function refresh(){
+  const [d] = await Promise.all([api("/clients/"+current), loadClients()]);
+  detail = d;
+  renderNav(); await render();
+}
+
+/** Section totals, after an item changed in place. */
+function recount(sec){
+  sec.approved = sec.items.filter(i=>i.approved).length;
+  sec.published = sec.items.filter(i=>i.approved && i.published).length;
+
+  // The overview stats and the client list read from a separate summary
+  // object, which would otherwise keep reporting the counts from page load.
+  const all = detail.sections;
+  const sum = detail.summary;
+  sum.itemCount = all.reduce((t,x)=>t+x.items.length,0);
+  sum.approvedCount = all.reduce((t,x)=>t+x.approved,0);
+  sum.publishedCount = all.reduce((t,x)=>t+x.published,0);
+
+  const listed = clients.find(c=>c.slug===current);
+  if(listed){
+    listed.itemCount = sum.itemCount;
+    listed.approvedCount = sum.approvedCount;
+    listed.publishedCount = sum.publishedCount;
+  }
+}
 
 /**
  * The client switcher.
@@ -950,30 +1098,62 @@ document.addEventListener("click", async e => {
       else { current=null; detail=null; view="clients"; syncLocation(); renderNav(); await render(); }
       return;
     }
-    if(t.dataset.client){ await openClient(t.dataset.client); return; }
-    if(t.dataset.open){ await openClient(t.dataset.open); return; }
+    if(t.dataset.client){ await openClient(t.dataset.client, undefined, t); return; }
+    if(t.dataset.open){ await openClient(t.dataset.open, undefined, t); return; }
     if(t.dataset.add !== undefined){ $("newClient").showModal(); return; }
     if(t.dataset.sec){ view = t.dataset.sec; syncLocation(); renderNav(); await render(); return; }
     if(t.dataset.goto){ view = t.dataset.goto; syncLocation(); renderNav(); await render(); return; }
     if(t.dataset.sys){ view = t.dataset.sys; syncLocation(); renderNav(); await render(); return; }
 
     if(t.dataset.act){
-      const i = t.dataset.i, act = t.dataset.act;
+      const i = Number(t.dataset.i), act = t.dataset.act;
+
+      // Delete shifts every later item's index, and the index is what the API
+      // addresses. Applying that locally and getting it wrong deletes the
+      // wrong row, so this one re-reads rather than guesses.
       if(act==="delete"){
         if(!confirm("Delete this item?")) return;
-        await api("/clients/"+current+"/content/"+view+"/"+i,{method:"DELETE"});
-      } else {
-        const body = act==="approve"?{approved:true}
-          : act==="unapprove"?{approved:false,published:false}
-          : act==="publish"?{published:true}:{published:false};
-        await api("/clients/"+current+"/content/"+view+"/"+i,{method:"PATCH",body:JSON.stringify(body)});
+        const done = working(t, "Deleting");
+        try{ await api("/clients/"+current+"/content/"+view+"/"+i,{method:"DELETE"}); await refresh(); }
+        finally { done(); }
+        return;
       }
-      await refresh(); return;
+
+      // Approve and publish change one row and nothing else, so the row changes
+      // now and the request follows. Waiting for a round trip to move a
+      // checkbox is what made working through a review queue feel broken.
+      const sec = detail.sections.find(x=>x.kind===view);
+      const item = sec && sec.items.find(x=>x.index===i);
+      if(!item) return;
+
+      const before = {approved:item.approved, published:item.published};
+      const body = act==="approve"?{approved:true}
+        : act==="unapprove"?{approved:false,published:false}
+        : act==="publish"?{published:true}:{published:false};
+
+      Object.assign(item, body); item._pending = true;
+      recount(sec); renderNav(); render();
+
+      try{
+        await api("/clients/"+current+"/content/"+view+"/"+i,{method:"PATCH",body:JSON.stringify(body)});
+        item._pending = false; render();
+      }catch(err){
+        // Put it back. A row left showing a state the server rejected is worse
+        // than the pause this replaced.
+        Object.assign(item, before); item._pending = false;
+        recount(sec); renderNav(); render();
+        toast("Not saved — " + err.message);
+      }
+      return;
     }
 
     if(t.dataset.bulk){
-      await api("/clients/"+current+"/content/"+view+"/bulk",{method:"POST",body:JSON.stringify({action:t.dataset.bulk})});
-      toast("Done."); await refresh(); return;
+      const done = working(t, "Applying");
+      try{
+        await api("/clients/"+current+"/content/"+view+"/bulk",{method:"POST",body:JSON.stringify({action:t.dataset.bulk})});
+        await refresh(); toast("Done.");
+      } finally { done(); }
+      return;
     }
 
     if(t.id==="addItem"){
@@ -983,8 +1163,12 @@ document.addEventListener("click", async e => {
         body[k] = k==="zips" ? v.split(",").map(z=>z.trim()).filter(Boolean) : v;
       });
       if(!Object.keys(body).length){ toast("Nothing to add."); return; }
-      await api("/clients/"+current+"/content/"+view,{method:"POST",body:JSON.stringify(body)});
-      toast("Added, approved, not yet published."); await refresh(); return;
+      const done = working(t, "Adding");
+      try{
+        await api("/clients/"+current+"/content/"+view,{method:"POST",body:JSON.stringify(body)});
+        await refresh(); toast("Added, approved, not yet published.");
+      } finally { done(); }
+      return;
     }
 
     if(t.dataset.hclosed!==undefined){
@@ -1060,8 +1244,12 @@ document.addEventListener("click", async e => {
           return {day, isClosed:closed, opens:closed?null:(opens||null), closes:closed?null:(closes||null)};
         });
       }
-      await api("/clients/"+current+"/profile",{method:"PUT",body:JSON.stringify(raw)});
-      toast("Profile saved."); await refresh(); return;
+      const done = working(t, "Saving");
+      try{
+        await api("/clients/"+current+"/profile",{method:"PUT",body:JSON.stringify(raw)});
+        await refresh(); toast("Profile saved.");
+      } finally { done(); }
+      return;
     }
 
     if(t.id==="saveSettings"){
@@ -1070,60 +1258,100 @@ document.addEventListener("click", async e => {
       document.querySelectorAll("[data-l]").forEach(el=>body.links[el.dataset.l]=el.value.trim());
       // Source config is not on this page any more; it saves on blur from the
       // Sources cards where it lives.
-      await api("/clients/"+current+"/settings",{method:"PATCH",body:JSON.stringify(body)});
-      toast("Settings saved."); await refresh(); return;
+      const done = working(t, "Saving");
+      try{
+        await api("/clients/"+current+"/settings",{method:"PATCH",body:JSON.stringify(body)});
+        await refresh(); toast("Settings saved.");
+      } finally { done(); }
+      return;
     }
 
     if(t.id==="deleteClient"){
-      if(!confirm("Delete "+detail.settings.name+" and all their content? This cannot be undone.")) return;
-      await api("/clients/"+current,{method:"DELETE"});
-      current=null; view="clients"; syncLocation(); await loadClients(); await render(); toast("Client deleted."); return;
+      const name = detail.settings.name;
+      if(!confirm("Delete "+name+" and all their content? This cannot be undone.")) return;
+      const done = working(t, "Deleting");
+      try{
+        await api("/clients/"+current,{method:"DELETE"});
+        current=null; detail=null; view="clients"; syncLocation();
+        await loadClients(); await render(); toast(name+" deleted.");
+      } finally { done(); }
+      return;
     }
 
     if(t.id==="runAudit"){
-      t.disabled=true; t.textContent="Checking the site as each crawler…";
+      const done = working(t, "Checking");
+      const hide = busy("Running the Tier 1 checks",
+        "Fetching the site as each AI crawler in turn, then reading robots.txt, the sitemap and the contact details. Usually a few seconds.");
       try{
         const r = await api("/clients/"+current+"/tier1/run",{method:"POST",body:JSON.stringify({})});
         toast(r.report.failed===0?"All automated checks passed.":r.report.failed+" check(s) failing.");
-      } finally { await render(); }
+      } finally { hide(); done(); await render(); }
       return;
     }
 
     if(t.dataset.gen){
       const dry = t.dataset.gen==="dry";
-      const out=$("genOut"); out.textContent="Running…"; t.disabled=true;
-      const r = await api("/clients/"+current+"/generate/faqs",
-        {method:"POST",body:JSON.stringify({dryRun:dry})});
-      t.disabled=false;
-      await refresh(); render();
-      if($("genOut")) $("genOut").textContent = r.output;
-      toast(dry ? "Preview only — nothing written." : "Generated. Read them before approving.");
+      const out=$("genOut"); if(out) out.textContent="Running…";
+      const done = working(t, dry?"Previewing":"Generating");
+      const hide = busy(dry ? "Previewing the questions" : "Generating questions",
+        "Assembling questions from this client's approved service areas, hours, credentials and brands.");
+      try{
+        const r = await api("/clients/"+current+"/generate/faqs",
+          {method:"POST",body:JSON.stringify({dryRun:dry})});
+        await refresh();
+        if($("genOut")) $("genOut").textContent = r.output;
+        toast(dry ? "Preview only — nothing written." : "Generated. Read them before approving.");
+      } finally { hide(); done(); }
       return;
     }
 
     if(t.dataset.run){
-      const out=$("runOut"); out.textContent="Running… this can take a minute.";
-      t.disabled=true;
-      const map={places:"/intake/places",website:"/intake/website",promote:"/promote"};
-      const r = await api("/clients/"+current+map[t.dataset.run],{method:"POST",body:JSON.stringify({})});
-      out.textContent = r.output; t.disabled=false;
-      await refresh(); render(); $("runOut").textContent = r.output;
-      if(t.dataset.run!=="promote" && detail.pendingIntake && detail.pendingIntake.total>0){
-        toast(detail.pendingIntake.total+" candidates found — press Promote to add them.", 6000);
-      } else {
-        toast(r.ok?"Finished.":"Finished with errors — see output.");
-      } return;
+      const kind = t.dataset.run;
+      const copy = {
+        website:["Crawling the website","Fetching pages one at a time with a pause between each, because robots.txt is respected rather than raced. A minute or two is normal."],
+        places:["Reading the Google listing","Fetching this client's place details from Google. A few seconds."],
+        promote:["Promoting candidates","Merging every source into the content lists. Blanks get filled; nothing a person wrote is overwritten."],
+      }[kind];
+
+      const out=$("runOut"); if(out) out.textContent="Running…";
+      const done = working(t, "Running");
+      const hide = busy(copy[0], copy[1]);
+
+      try{
+        const map={places:"/intake/places",website:"/intake/website",promote:"/promote"};
+        const r = await api("/clients/"+current+map[kind],{method:"POST",body:JSON.stringify({})});
+        await refresh();
+        if($("runOut")) $("runOut").textContent = r.output;
+        if(kind!=="promote" && detail.pendingIntake && detail.pendingIntake.total>0){
+          toast(detail.pendingIntake.total+" candidates found — press Promote to add them.", 6000);
+        } else {
+          toast(r.ok?"Finished.":"Finished with errors — see output.");
+        }
+      } finally { hide(); done(); }
+      return;
     }
 
     if(t.dataset.db){
-      const out=$("dbOut"); out.textContent="Running…"; t.disabled=true;
-      const body = t.dataset.db==="dry"?{dryRun:true}:t.dataset.db==="publish"?{publish:true}:{};
-      const r = await api("/clients/"+current+"/publish/database",{method:"POST",body:JSON.stringify(body)});
-      out.textContent = r.output; t.disabled=false; return;
+      const mode = t.dataset.db;
+      const out=$("dbOut"); if(out) out.textContent="Running…";
+      const done = working(t, mode==="dry"?"Checking":"Loading");
+      const hide = busy(
+        mode==="dry" ? "Checking what would be loaded" : mode==="publish" ? "Loading and publishing" : "Loading into the database",
+        mode==="publish"
+          ? "Writing approved content to the database and marking this client live. After this the public API will serve them."
+          : "Writing approved content to the database. Nothing goes live until you publish.");
+      try{
+        const body = mode==="dry"?{dryRun:true}:mode==="publish"?{publish:true}:{};
+        const r = await api("/clients/"+current+"/publish/database",{method:"POST",body:JSON.stringify(body)});
+        if($("dbOut")) $("dbOut").textContent = r.output;
+        toast(r.ok===false?"Finished with errors — see output.":"Done.");
+      } finally { hide(); done(); }
+      return;
     }
 
     if(t.id==="loadJsonld"){
-      const r = await api("/clients/"+current+"/jsonld");
+      const done = working(t, "Generating");
+      let r; try { r = await api("/clients/"+current+"/jsonld"); } finally { done(); }
       $("jsonldOut").textContent = JSON.stringify(r.graph,null,2);
 
       const issues = r.issues||[];
@@ -1161,40 +1389,46 @@ document.addEventListener("click", async e => {
     if(t.id==="createAgency"){
       const name = ($("agName").value||"").trim(), email = ($("agEmail").value||"").trim();
       if(!name || !email){ toast("Both a name and an owner email are needed."); return; }
-      t.disabled=true;
+      const done = working(t, "Creating");
       try{
         const r = await api("/platform/agencies",{method:"POST",body:JSON.stringify({name,ownerEmail:email})});
         $("agOut").innerHTML = '<div class="banner '+(r.emailed?"ok":"warn")+'" style="margin-top:.7rem">'+
           '<strong>'+esc(r.agency.name)+'</strong> &mdash; '+esc(r.note)+'</div>';
         $("agName").value=""; $("agEmail").value="";
-      } finally { t.disabled=false; }
+      } finally { done(); }
       return;
     }
 
     if(t.id==="sendInvite"){
       const email = ($("inviteEmail").value||"").trim();
       if(!email){ toast("Enter an email address."); return; }
-      t.disabled=true;
+      const done = working(t, "Sending");
       try{
         const r = await api("/agency/invites",{method:"POST",body:JSON.stringify({email})});
         // Rendered rather than toasted: when the email cannot be sent the note
         // explains what to do instead, and that should not vanish after 3s.
         $("inviteOut").innerHTML = '<div class="banner '+(r.emailed?"ok":"warn")+'" style="margin-top:.7rem">'+
           '<strong>'+esc(r.email)+'</strong> &mdash; '+esc(r.note)+'</div>';
-      } finally { t.disabled=false; }
+      } finally { done(); }
       return;
     }
 
     if(t.dataset.rm){
       if(!confirm("Remove "+t.dataset.rm+" from this agency?")) return;
-      await api("/agency/members/"+encodeURIComponent(t.dataset.rm),{method:"DELETE"});
-      toast("Removed."); await render(); return;
+      const done = working(t, "Removing");
+      try{
+        await api("/agency/members/"+encodeURIComponent(t.dataset.rm),{method:"DELETE"});
+        await render(); toast("Removed.");
+      } finally { done(); }
+      return;
     }
 
     if(t.id==="runNap"){
       const out=$("napOut"); out.innerHTML='<div class="sub" style="margin:0">Comparing…</div>';
-      t.disabled=true;
-      let r; try { r = await api("/clients/"+current+"/nap"); } finally { t.disabled=false; }
+      const done = working(t, "Comparing");
+      const hide = busy("Comparing name, address and phone",
+        "Reading the live site alongside the profile, the crawl and Google. The live fetch is what takes the time.");
+      let r; try { r = await api("/clients/"+current+"/nap"); } finally { hide(); done(); }
 
       const rows = r.findings.map(f=>{
         const cell = f.agrees
@@ -1224,10 +1458,12 @@ document.addEventListener("click", async e => {
 
     if(t.id==="verifyMarkup"){
       const out=$("verifyOut"); out.innerHTML='<div class="sub">Reading the live site…</div>';
-      t.disabled=true;
+      const done = working(t, "Checking");
+      const hide = busy("Checking the live site",
+        "Fetching the client's site and comparing the markup published there against what this app would generate now.");
       let r;
       try { r = await api("/clients/"+current+"/verify-markup"); }
-      finally { t.disabled=false; }
+      finally { hide(); done(); }
 
       const banner={current:"ok",stale:"warn",foreign:"bad",missing:"bad"}[r.status];
       const head={current:"Live and current.",stale:"Installed, but out of date.",
@@ -1256,11 +1492,18 @@ document.addEventListener("click", async e => {
 function closeNewClient(){ $("newClient").close(); $("ncName").value=""; $("ncDomain").value=""; }
 document.addEventListener("change", async e => {
   const box = e.target.closest("[data-manual]"); if(!box) return;
+  // The box is already ticked — the browser did that. Re-rendering the page
+  // around it on the way in only made the tick appear to lag behind the click.
+  const was = !box.checked;
+  box.disabled = true;
   try{
     await api("/clients/"+current+"/tier1/manual/"+box.dataset.manual,
       {method:"PATCH",body:JSON.stringify({checked:box.checked})});
     await render();
-  }catch(err){ toast(err.message); }
+  }catch(err){
+    box.checked = was;
+    toast("Not saved — " + err.message);
+  } finally { box.disabled = false; }
 });
 
 $("ncCancel").addEventListener("click", closeNewClient);
@@ -1280,11 +1523,13 @@ document.addEventListener("change", async e => {
   const sources = {};
   document.querySelectorAll("[data-src]").forEach(f => sources[f.dataset.src] = f.value.trim());
 
+  el.disabled = true;
   try{
     await api("/clients/"+current+"/settings",{method:"PATCH",body:JSON.stringify({sources})});
     detail.settings.sources = sources;
     toast("Saved.");
-  }catch(err){ toast(err.message); }
+  }catch(err){ toast("Not saved — " + err.message); }
+  finally { el.disabled = false; el.focus(); }
 });
 
 $("pickSearch").addEventListener("input", renderPickList);
@@ -1311,14 +1556,14 @@ $("ncGo").addEventListener("click", async () => {
   const name=$("ncName").value.trim(), domain=$("ncDomain").value.trim();
   if(!name||!domain){ toast("Name and domain are both required."); return; }
 
-  const btn=$("ncGo"); btn.disabled=true;
+  const done = working($("ncGo"), "Creating");
   try{
     const r = await api("/clients",{method:"POST",body:JSON.stringify({name,domain,schemaType:$("ncType").value})});
     closeNewClient();
     await loadClients(); await openClient(r.client.slug,"sources");
     toast("Client created. Pull from Google to fill the profile.");
   }catch(err){ toast(err.message); }
-  finally{ btn.disabled=false; }
+  finally{ done(); }
 });
 
 /**

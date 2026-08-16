@@ -242,6 +242,29 @@ sequence anywhere in that file — including inside a comment — truncates the 
 and freezes the portal. `assertSingleScript` throws at boot if it happens. See
 [gotchas.md](gotchas.md#a-comment-froze-the-entire-portal).
 
+### Every action says it is happening
+
+Feedback is proportional to the work, in three tiers. The signal should match
+what the action costs: a modal that flashes for 150ms is noise, and a review
+queue where every click blocks the screen cannot be worked through at all.
+
+| Tier | Actions | Signal |
+|---|---|---|
+| Instant | approve, unapprove, publish, unpublish, manual check | Applied **optimistically** — the row changes now, dimmed until confirmed, reverted with an error if the server refuses |
+| Page | open a client, save, add, delete, bulk | The clicked button becomes a spinner and disables |
+| Long | crawl, Google pull, promote, Tier 1, database load, NAP, verify | **Dismissable overlay** naming the job. Hiding leaves it running — a crawl takes minutes, and holding someone hostage to it is not a feature |
+
+Underneath all three, a thin bar at the top moves whenever any request is in
+flight. It lives inside the `api()` wrapper rather than at the call sites, so it
+covers endpoints nobody remembered to handle, including ones added later.
+
+**Approve and publish do not re-read the client.** They change one row and know
+which, so they patch local state and re-render. Every toggle used to fire two
+requests and a full re-render, which is most of why the portal felt slow once
+client data moved into Postgres. Delete is the exception: it shifts every later
+item's index, and the index is what the API addresses, so that one re-reads
+rather than guessing.
+
 ## Validation happens twice
 
 **Profile validation** (`validateProfile`) splits gaps into `blocking` — without
