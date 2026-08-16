@@ -19,7 +19,8 @@
     "verify:markup": "tsx src/audit/verify-markup.ts",
     "audit:nap": "tsx src/audit/nap.ts",
     "audit:directories": "tsx src/audit/directory-presence.ts",
-    "generate:faqs": "tsx src/content/generate-faqs.ts"
+    "generate:faqs": "tsx src/content/generate-faqs.ts",
+    "docs:check": "tsx scripts/check-docs.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",
