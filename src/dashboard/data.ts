@@ -90,7 +90,8 @@ export function buildDashboardData(tenant: string): DashboardData {
         { label: "Domain", value: profile.domain, blocking: false },
         { label: "Founded", value: profile.foundedYear ? String(profile.foundedYear) : null, blocking: false },
         { label: "Google profile", value: profile.gbpUrl, blocking: false },
-        { label: "Response time", value: profile.responseTime, blocking: false },
+        { label: "Google category", value: profile.primaryCategory, blocking: false },
+        { label: "Other profiles", value: profile.sameAs.length ? String(profile.sameAs.length) : null, blocking: false },
       ]
     : [];
 

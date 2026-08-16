@@ -14,6 +14,7 @@ import {
   extractHubTextItems,
   extractHubUrlCluster,
   extractMeta,
+  extractPlaceIds,
   extractServices,
   pageHrefs,
 } from "./html";
@@ -179,6 +180,7 @@ export async function crawlSite(options: CrawlOptions): Promise<IntakeResult> {
     // --- heuristics ---------------------------------------------------------
     extractMeta(page.html, url, result.entity);
     extractContact(page.html, url, result.entity);
+    extractPlaceIds(page.html, url, result.entity);
     result.faqs.push(...extractFaqs(page.html, url));
     result.credentials.push(...extractCredentials(page.html, url));
     result.services.push(...extractServices(page.html, url));
@@ -314,6 +316,25 @@ export async function crawlSite(options: CrawlOptions): Promise<IntakeResult> {
 
   if (result.entity.phone.length === 0) {
     result.notes.push("No phone number found — check that the site uses tel: links.");
+  }
+
+  // The same ID appears on every page that embeds a map, so dedupe across the
+  // whole crawl rather than per page.
+  result.entity.placeId = dedupe(result.entity.placeId, (candidate) => candidate.value);
+  result.entity.gbpUrl = dedupe(result.entity.gbpUrl, (candidate) => candidate.value);
+
+  if (result.entity.placeId.length === 1) {
+    result.notes.push(
+      `Google place ID found in the site's markup: ${result.entity.placeId[0].value}. ` +
+        `Save it in Settings → Content sources — for a service-area business it is the only ` +
+        `way Places intake can reach the listing, since Google's search cannot find those by name.`
+    );
+  } else if (result.entity.placeId.length > 1) {
+    result.notes.push(
+      `${result.entity.placeId.length} different Google place IDs are embedded on this site. ` +
+        `That usually means multiple locations, or a third-party widget carrying someone else's ` +
+        `ID. Confirm which one is the business before saving it in Settings.`
+    );
   }
 
   result.faqs = dedupe(result.faqs, (faq) => faq.question.toLowerCase().trim());

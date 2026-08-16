@@ -10,6 +10,12 @@ import type {
   ServiceDto,
   SourceOptions,
 } from "../types";
+import type {
+  AttributeEntry,
+  BusinessType,
+  ContactPointEntry,
+  SpecialHours,
+} from "../../data/profile";
 
 /**
  * Serves the API from Supabase.
@@ -80,7 +86,12 @@ export class SupabaseSource implements KnowledgeSource {
       .from("business_profile")
       .select(
         "name, legal_name, description, phone, email, domain, street, city, region, " +
-          "postal_code, country, gbp_url, founded_year, response_time, emergency_service"
+          "postal_code, country, gbp_url, founded_year, primary_category, business_type, schema_type, same_as, " +
+          "alternate_name, slogan, logo_url, image_urls, price_range, payment_accepted, " +
+          "currencies_accepted, languages, geo_latitude, geo_longitude, has_map, " +
+          "number_of_employees, awards, member_of, founder, fax_number, contact_points, " +
+          "booking_url, special_hours, tax_id, vat_id, duns, lei_code, isic_v4, branch_code, " +
+          "attributes"
       )
       .eq("tenant_id", tenantId);
 
@@ -126,9 +137,53 @@ export class SupabaseSource implements KnowledgeSource {
       },
       gbpUrl: text(r.gbp_url),
       foundedYear: typeof r.founded_year === "number" ? r.founded_year : null,
-      responseTime: text(r.response_time),
-      emergencyService: r.emergency_service === true,
       hours,
+      primaryCategory: text(r.primary_category),
+      businessType: businessType(r.business_type),
+      schemaType: text(r.schema_type) ?? "LocalBusiness",
+      sameAs: strings(r.same_as),
+
+      alternateName: text(r.alternate_name),
+      slogan: text(r.slogan),
+      logoUrl: text(r.logo_url),
+      imageUrls: strings(r.image_urls),
+
+      priceRange: text(r.price_range),
+      paymentAccepted: strings(r.payment_accepted),
+      currenciesAccepted: text(r.currencies_accepted),
+
+      languages: strings(r.languages),
+      // Stored as two columns so they can be indexed and queried by distance;
+      // reassembled into one object because half a coordinate is meaningless.
+      geo:
+        typeof r.geo_latitude === "number" && typeof r.geo_longitude === "number"
+          ? { latitude: r.geo_latitude, longitude: r.geo_longitude }
+          : null,
+      hasMap: text(r.has_map),
+
+      numberOfEmployees:
+        typeof r.number_of_employees === "number" ? r.number_of_employees : null,
+      awards: strings(r.awards),
+      memberOf: strings(r.member_of),
+      founder: text(r.founder),
+
+      faxNumber: text(r.fax_number),
+      contactPoints: Array.isArray(r.contact_points)
+        ? (r.contact_points as ContactPointEntry[])
+        : [],
+      bookingUrl: text(r.booking_url),
+
+      specialHours: Array.isArray(r.special_hours) ? (r.special_hours as SpecialHours[]) : [],
+
+      taxID: text(r.tax_id),
+      vatID: text(r.vat_id),
+      duns: text(r.duns),
+      leiCode: text(r.lei_code),
+      isicV4: text(r.isic_v4),
+      branchCode: text(r.branch_code),
+
+      attributes: Array.isArray(r.attributes) ? (r.attributes as AttributeEntry[]) : [],
+
       serviceCount: services.length,
       serviceAreaCount: areas.length,
     };
@@ -226,4 +281,17 @@ export class SupabaseSource implements KnowledgeSource {
 
 function text(value: unknown): string | null {
   return typeof value === "string" && value.trim() !== "" ? value : null;
+}
+
+/** Postgres text[] arrives as an array; anything else means the column is null. */
+function strings(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(String).filter((entry) => entry.trim() !== "") : [];
+}
+
+/**
+ * The column has a check constraint, but the API must not crash on a row that
+ * predates it or was written by hand.
+ */
+function businessType(value: unknown): BusinessType {
+  return value === "service_area" || value === "hybrid" ? value : "storefront";
 }

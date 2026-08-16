@@ -14,39 +14,23 @@
  * prose an AI has to interpret.
  */
 
-export interface AddressDto {
-  street: string | null;
-  city: string | null;
-  region: string | null;
-  postalCode: string | null;
-  country: string;
-}
+import type { BusinessProfile, OpeningHours, PostalAddress } from "../data/profile";
 
-export interface HoursDto {
-  /** 0 = Sunday. */
-  day: number;
-  opens: string | null;
-  closes: string | null;
-  isClosed: boolean;
-}
+/** Aliases kept so existing call sites and the OpenAPI spec still read clearly. */
+export type AddressDto = PostalAddress;
+export type HoursDto = OpeningHours;
 
 /**
  * The entity record. The most important response in the API — everything else
  * is only useful once an AI can resolve who this business is.
+ *
+ * Derived from `BusinessProfile` rather than restated. The two were once
+ * hand-maintained copies of the same field list, and they drifted every single
+ * time a field was added or removed — each drift a compile error at best and a
+ * field silently missing from the API at worst. The public shape is the profile
+ * plus two counts; saying so in the type makes that permanent.
  */
-export interface BusinessDto {
-  name: string;
-  legalName: string | null;
-  description: string | null;
-  phone: string | null;
-  email: string | null;
-  domain: string | null;
-  address: AddressDto;
-  gbpUrl: string | null;
-  foundedYear: number | null;
-  responseTime: string | null;
-  emergencyService: boolean;
-  hours: HoursDto[];
+export interface BusinessDto extends BusinessProfile {
   serviceCount: number;
   serviceAreaCount: number;
 }

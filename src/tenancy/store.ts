@@ -78,19 +78,47 @@ export const EMPTY_LINKS: TenantLinks = {
 export interface TenantSources {
   servicesPageUrl: string;
   serviceAreasPageUrl: string;
+  /**
+   * Google place ID — and for most clients this is not optional in practice.
+   *
+   * Home-services businesses are overwhelmingly service-area businesses that
+   * hide their street address, and Google's Text Search does not return
+   * address-less SABs. Searching the exact business name returns nothing at
+   * all, however live and well-reviewed the listing is. They are reachable by
+   * place ID and effectively only by place ID, so for a plumber, hauler or HVAC
+   * company this field is the entire route in rather than a fallback.
+   */
+  googlePlaceId: string;
 }
 
 export const EMPTY_SOURCES: TenantSources = {
   servicesPageUrl: "",
   serviceAreasPageUrl: "",
+  googlePlaceId: "",
 };
 
+/**
+ * Operational configuration for a client — how we work on them, as opposed to
+ * what we publish about them, which is the business profile.
+ *
+ * `name`, `domain` and `schemaType` appear here but are **not stored here**.
+ * They are read from and written to `business-profile.json`, which is the one
+ * source of truth for anything that reaches a crawler. They used to be stored
+ * in both places, and the two copies drifted: editing "Business name" in
+ * Settings renamed the nav label while the published markup kept the old name,
+ * with nothing to indicate the edit had no effect.
+ *
+ * They stay on this interface so the many callers that reasonably expect
+ * `settings.domain` keep working; `readSettings` merges them in and
+ * `writeSettings` sends them back to the profile.
+ */
 export interface TenantSettings {
   slug: string;
+  /** From the business profile. Editing it here writes to the profile. */
   name: string;
-  /** Root domain the markup and catalog are published on. */
+  /** From the business profile. Root domain for markup and the catalog. */
   domain: string;
-  /** schema.org type — Plumber, HVACBusiness, Electrician, LocalBusiness. */
+  /** From the business profile. schema.org type — Plumber, LocalBusiness. */
   schemaType: string;
   /** Public URL of this tenant's API, once deployed. */
   apiBaseUrl: string;
@@ -157,15 +185,47 @@ export function listTenantSlugs(): string[] {
     .sort();
 }
 
+/** Raw profile read, kept local so store.ts stays free of a circular import. */
+function readProfileFields(slug: string): { name: string; domain: string; schemaType: string } {
+  try {
+    const raw = JSON.parse(fs.readFileSync(profilePath(slug), "utf8")) as Record<string, unknown>;
+    return {
+      name: typeof raw.name === "string" ? raw.name : "",
+      domain: typeof raw.domain === "string" ? raw.domain : "",
+      schemaType: typeof raw.schemaType === "string" ? raw.schemaType : "LocalBusiness",
+    };
+  } catch {
+    return { name: "", domain: "", schemaType: "LocalBusiness" };
+  }
+}
+
+function writeProfileFields(slug: string, fields: Partial<Record<string, unknown>>): void {
+  let raw: Record<string, unknown> = {};
+  try {
+    raw = JSON.parse(fs.readFileSync(profilePath(slug), "utf8")) as Record<string, unknown>;
+  } catch {
+    raw = {};
+  }
+  fs.mkdirSync(tenantDir(slug), { recursive: true });
+  fs.writeFileSync(profilePath(slug), JSON.stringify({ ...raw, ...fields }, null, 2) + "\n", "utf8");
+}
+
 export function readSettings(slug: string): TenantSettings | null {
   if (!tenantExists(slug)) return null;
   try {
     const parsed = JSON.parse(fs.readFileSync(settingsPath(slug), "utf8")) as TenantSettings;
-    // Backfill so settings files written before a field existed still load.
+    const profile = readProfileFields(slug);
+
     return {
       ...parsed,
+      // Backfill so settings files written before a field existed still load.
       sources: { ...EMPTY_SOURCES, ...(parsed.sources ?? {}) },
       links: { ...EMPTY_LINKS, ...(parsed.links ?? {}) },
+      // The profile wins. A settings.json still carrying these from before the
+      // consolidation is stale by definition.
+      name: profile.name || parsed.name || "",
+      domain: profile.domain || parsed.domain || "",
+      schemaType: profile.schemaType || parsed.schemaType || "LocalBusiness",
     };
   } catch {
     return null;
@@ -174,7 +234,21 @@ export function readSettings(slug: string): TenantSettings | null {
 
 export function writeSettings(settings: TenantSettings): void {
   fs.mkdirSync(tenantDir(settings.slug), { recursive: true });
-  fs.writeFileSync(settingsPath(settings.slug), JSON.stringify(settings, null, 2) + "\n", "utf8");
+
+  // Route the three shared fields to the profile, and keep them out of
+  // settings.json entirely so there is nothing left to drift.
+  writeProfileFields(settings.slug, {
+    name: settings.name,
+    domain: settings.domain,
+    schemaType: settings.schemaType,
+  });
+
+  const { name, domain, schemaType, ...operational } = settings;
+  fs.writeFileSync(
+    settingsPath(settings.slug),
+    JSON.stringify(operational, null, 2) + "\n",
+    "utf8"
+  );
 }
 
 const EMPTY_PROFILE = {
@@ -187,9 +261,44 @@ const EMPTY_PROFILE = {
   address: { street: null, city: null, region: null, postalCode: null, country: "US" },
   gbpUrl: null,
   foundedYear: null,
-  responseTime: null,
-  emergencyService: false,
   hours: [] as unknown[],
+  primaryCategory: null,
+  businessType: "storefront",
+  schemaType: "LocalBusiness",
+  sameAs: [] as string[],
+
+  alternateName: null,
+  slogan: null,
+  logoUrl: null,
+  imageUrls: [] as string[],
+
+  priceRange: null,
+  paymentAccepted: [] as string[],
+  currenciesAccepted: "USD",
+
+  languages: [] as string[],
+  geo: null,
+  hasMap: null,
+
+  numberOfEmployees: null,
+  awards: [] as string[],
+  memberOf: [] as string[],
+  founder: null,
+
+  faxNumber: null,
+  contactPoints: [] as unknown[],
+  bookingUrl: null,
+
+  specialHours: [] as unknown[],
+
+  taxID: null,
+  vatID: null,
+  duns: null,
+  leiCode: null,
+  isicV4: null,
+  branchCode: null,
+
+  attributes: [] as unknown[],
 };
 
 /**
@@ -241,13 +350,20 @@ export function createTenant(input: {
   };
 
   fs.mkdirSync(tenantDir(slug), { recursive: true });
-  writeSettings(settings);
 
+  // Profile first. writeSettings now writes name, domain and schemaType *into*
+  // the profile, so creating the empty profile afterwards would erase them.
   fs.writeFileSync(
     profilePath(slug),
-    JSON.stringify({ ...EMPTY_PROFILE, name: settings.name, domain }, null, 2) + "\n",
+    JSON.stringify(
+      { ...EMPTY_PROFILE, name: settings.name, domain, schemaType: settings.schemaType },
+      null,
+      2
+    ) + "\n",
     "utf8"
   );
+
+  writeSettings(settings);
 
   for (const kind of CONTENT_KINDS) {
     fs.writeFileSync(contentPath(slug, kind), JSON.stringify({ items: [] }, null, 2) + "\n", "utf8");

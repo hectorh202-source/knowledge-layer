@@ -16,6 +16,54 @@ import {
  * trusted. Nothing from this file should ever be auto-approved.
  */
 
+/**
+ * Google place ID, scraped from whatever the site embeds.
+ *
+ * The one heuristic here that is not a guess: a place ID is an opaque
+ * Google-issued identifier, so finding one on a site is near-proof of which
+ * listing that site belongs to. It earns high confidence where nothing else in
+ * this file does.
+ *
+ * Worth the effort because Google's search surfaces cannot find service-area
+ * businesses by name at all, and most home-services clients are exactly that.
+ * The site's own embedded map or review widget is the reliable route to the
+ * listing.
+ *
+ * Two forms appear in the wild. `ChIJ…` is the place ID proper. `cid=` is the
+ * older numeric customer ID, which is not interchangeable with it — it is
+ * recorded as a link for a human, never as an ID to query with.
+ */
+export function extractPlaceIds(
+  html: string,
+  url: string,
+  into: EntityCandidates
+): void {
+  // Deliberately run over raw HTML rather than parsed text: these hide in
+  // iframe src attributes, inline script config and data- attributes, none of
+  // which survive a text extraction.
+  const seen = new Set<string>();
+
+  for (const match of html.matchAll(/ChIJ[A-Za-z0-9_-]{16,}/g)) {
+    const id = match[0];
+    if (seen.has(id)) continue;
+    seen.add(id);
+    into.placeId.push({
+      value: id,
+      provenance: provenance("website", url, "place ID embedded in page markup", "high"),
+    });
+  }
+
+  for (const match of html.matchAll(/maps\.google\.[a-z.]+\/\?cid=(\d+)/g)) {
+    const link = `https://maps.google.com/?cid=${match[1]}`;
+    if (seen.has(link)) continue;
+    seen.add(link);
+    into.gbpUrl.push({
+      value: link,
+      provenance: provenance("website", url, "Google Maps cid link in page markup", "high"),
+    });
+  }
+}
+
 /** Phone numbers in tel: links are unambiguous; ones in body text are not. */
 export function extractContact(html: string, url: string, into: EntityCandidates): void {
   const $ = cheerio.load(html);
@@ -45,12 +93,19 @@ export function extractContact(html: string, url: string, into: EntityCandidates
   // Google Business Profile links are usually in a footer or a "reviews" block.
   $("a[href]").each((_, element) => {
     const href = $(element).attr("href") ?? "";
-    if (/g\.page|maps\.app\.goo\.gl|google\.[a-z.]+\/maps/i.test(href)) {
-      into.gbpUrl.push({
-        value: href,
-        provenance: provenance("website", url, "link to Google Maps", "medium"),
-      });
-    }
+    if (!/g\.page|maps\.app\.goo\.gl|google\.[a-z.]+\/maps/i.test(href)) return;
+
+    // A review widget links every individual reviewer's Google profile, and
+    // those match the pattern above perfectly. One site produced over a hundred
+    // of them, drowning the real listing and writing a stranger's reviewer page
+    // into the business profile as its Google URL. They are people, not the
+    // business.
+    if (/\/maps\/contrib\//i.test(href)) return;
+
+    into.gbpUrl.push({
+      value: href,
+      provenance: provenance("website", url, "link to Google Maps", "medium"),
+    });
   });
 
   const bodyText = $("body").text().replace(/\s+/g, " ");

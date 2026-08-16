@@ -5,15 +5,20 @@ import {
 } from "./types";
 
 /**
- * Google Places API (New) intake.
+ * Google Places API (New) intake, by place ID.
  *
- * The strategic point of this source: it uses OUR API key and needs no
- * authorization from the customer. A profile can be pre-filled during a sales
- * call, before anything is signed — which is a different onboarding experience
- * from "please grant us access to your Google Business Profile."
+ * Deliberately has no search. Home-services businesses are overwhelmingly
+ * service-area businesses that hide their street address, and Google returns
+ * none of those from any queryable surface — Text Search, Autocomplete and the
+ * legacy Find Place endpoints were each tested against a live, verified,
+ * well-reviewed listing and every one came back empty. That is Google policy,
+ * not a gap to engineer around: SABs are mostly home-based, and a searchable API
+ * would publish home addresses in bulk.
  *
- * The full GBP API gives more (Q&A, posts, attributes) but requires the owner
- * to OAuth in. That's a separate source for later.
+ * So the place ID is the input. It comes from the client's own site, where the
+ * crawl finds it, or from Settings where someone pasted it. If neither exists,
+ * the business gets entered by hand — which is a smaller cost than a pile of
+ * fallbacks that each fail in their own way.
  *
  * LICENSING CONSTRAINT, and it shapes how this output may be used:
  * Google's terms allow indefinite storage of `place_id` only. Most other
@@ -27,17 +32,7 @@ import {
  * content.
  */
 
-const SEARCH_URL = "https://places.googleapis.com/v1/places:searchText";
 const DETAILS_URL = "https://places.googleapis.com/v1/places";
-
-/** Fields requested from Text Search, used only to identify the right place. */
-const SEARCH_FIELDS = [
-  "places.id",
-  "places.displayName",
-  "places.formattedAddress",
-  "places.nationalPhoneNumber",
-  "places.websiteUri",
-].join(",");
 
 /** Fields requested from Place Details. */
 const DETAIL_FIELDS = [
@@ -57,55 +52,40 @@ const DETAIL_FIELDS = [
   "editorialSummary",
 ].join(",");
 
-export interface PlacesOptions {
-  apiKey: string;
-  /** Free-text query, e.g. "TitanZ Plumbing Port Charlotte FL". */
-  query: string;
-  /** Used to confirm the match is the right business. */
-  expectPhone?: string | null;
-  expectDomain?: string | null;
-}
-
-interface PlaceSummary {
-  id: string;
-  name: string;
-  address: string | null;
-  phone: string | null;
-  website: string | null;
-}
-
-/** Digits only, so "+1-941-875-9669" and "(941) 875-9669" compare equal. */
-function phoneKey(value: string | null | undefined): string {
+/**
+ * Pulls a place ID out of whatever a client actually sends you.
+ *
+ * Asking a business owner for their "place ID" gets you a link, because that is
+ * what Google gives them — a review request, a Maps share, a directions URL.
+ * Requiring the bare identifier means someone hand-edits a URL for every client,
+ * which is tedious and a good way to truncate an ID by one character.
+ *
+ * Returns "" when there is no ID present. A `cid=` link holds a *different*
+ * identifier that cannot be converted to a place ID without a browser, so those
+ * are rejected rather than mangled into a wrong lookup.
+ */
+export function parsePlaceId(input: string | null | undefined): string {
+  if (!input) return "";
+  const value = input.trim();
   if (!value) return "";
-  const digits = value.replace(/\D/g, "");
-  return digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
-}
 
-function hostKey(value: string | null | undefined): string {
-  if (!value) return "";
-  try {
-    return new URL(value.startsWith("http") ? value : `https://${value}`).hostname
-      .replace(/^www\./, "")
-      .toLowerCase();
-  } catch {
-    return "";
-  }
+  if (/^ChIJ[A-Za-z0-9_-]{16,}$/.test(value)) return value;
+
+  const embedded = value.match(/ChIJ[A-Za-z0-9_-]{16,}/);
+  return embedded ? embedded[0] : "";
 }
 
 async function googleFetch(
   url: string,
   apiKey: string,
-  fieldMask: string,
-  body?: unknown
+  fieldMask: string
 ): Promise<Record<string, unknown>> {
   const response = await fetch(url, {
-    method: body ? "POST" : "GET",
+    method: "GET",
     headers: {
       "X-Goog-Api-Key": apiKey,
       "X-Goog-FieldMask": fieldMask,
-      ...(body ? { "Content-Type": "application/json" } : {}),
     },
-    ...(body ? { body: JSON.stringify(body) } : {}),
   });
 
   const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
@@ -119,73 +99,11 @@ async function googleFetch(
   return payload;
 }
 
-async function searchPlaces(options: PlacesOptions): Promise<PlaceSummary[]> {
-  const payload = await googleFetch(SEARCH_URL, options.apiKey, SEARCH_FIELDS, {
-    textQuery: options.query,
-    maxResultCount: 5,
-  });
-
-  const places = Array.isArray(payload.places) ? payload.places : [];
-
-  return places.map((raw) => {
-    const p = raw as Record<string, unknown>;
-    const displayName = p.displayName as Record<string, unknown> | undefined;
-
-    return {
-      id: String(p.id ?? ""),
-      name: String(displayName?.text ?? ""),
-      address: typeof p.formattedAddress === "string" ? p.formattedAddress : null,
-      phone: typeof p.nationalPhoneNumber === "string" ? p.nationalPhoneNumber : null,
-      website: typeof p.websiteUri === "string" ? p.websiteUri : null,
-    };
-  });
-}
-
-export interface MatchResult {
-  place: PlaceSummary;
-  /** Why we believe this is the right business. */
-  reasons: string[];
-  confident: boolean;
-}
-
-/**
- * Picks the right place from search results.
- *
- * Matching matters more than it looks: promoting the wrong business's hours and
- * phone number into a customer's profile would be worse than having none, and
- * "first result" is not a good enough reason. A phone or domain match is
- * evidence; a name that merely looks similar is not.
- */
-export function matchPlace(
-  results: PlaceSummary[],
-  options: PlacesOptions
-): MatchResult | null {
-  if (results.length === 0) return null;
-
-  const wantPhone = phoneKey(options.expectPhone);
-  const wantHost = hostKey(options.expectDomain);
-
-  let bestMatch: MatchResult | null = null;
-
-  for (const place of results) {
-    const reasons: string[] = [];
-
-    if (wantPhone && phoneKey(place.phone) === wantPhone) {
-      reasons.push("phone number matches");
-    }
-    if (wantHost && hostKey(place.website) === wantHost) {
-      reasons.push("website domain matches");
-    }
-
-    const confident = reasons.length > 0;
-
-    if (confident) return { place, reasons, confident };
-    if (!bestMatch) {
-      bestMatch = { place, reasons: ["first search result, nothing corroborated"], confident: false };
-    }
-  }
-
-  return bestMatch;
+export async function fetchPlaceDetails(
+  placeId: string,
+  apiKey: string
+): Promise<Record<string, unknown>> {
+  return googleFetch(`${DETAILS_URL}/${placeId}`, apiKey, DETAIL_FIELDS);
 }
 
 function mapAddressComponents(
@@ -228,6 +146,24 @@ function mapOpeningHours(
 
   const byDay = new Map<number, { opens: string; closes: string }>();
 
+  // A business open around the clock is a single period: day 0, midnight, and
+  // no close at all — Google does not enumerate the other six days. Read
+  // literally that says "open Sunday, closed the rest of the week", which is the
+  // opposite of the truth and would go straight into the customer's JSON-LD as
+  // a six-day closure. Verified against a live 24/7 listing.
+  if (periods.length === 1) {
+    const only = periods[0] as Record<string, unknown> | null;
+    const open = only?.open as Record<string, unknown> | undefined;
+    if (open && !only?.close && (open.hour ?? 0) === 0 && (open.minute ?? 0) === 0) {
+      return Array.from({ length: 7 }, (_unused, day) => ({
+        day,
+        opens: "00:00",
+        closes: "23:59",
+        isClosed: false,
+      }));
+    }
+  }
+
   for (const raw of periods) {
     if (!raw || typeof raw !== "object") continue;
     const period = raw as Record<string, unknown>;
@@ -257,26 +193,22 @@ function mapOpeningHours(
   return hours;
 }
 
-export async function fetchPlaceDetails(
-  placeId: string,
-  options: PlacesOptions
-): Promise<Record<string, unknown>> {
-  return googleFetch(`${DETAILS_URL}/${placeId}`, options.apiKey, DETAIL_FIELDS);
-}
-
-/** Converts Place Details into intake candidates. */
+/**
+ * Converts Place Details into intake candidates.
+ *
+ * Everything is high confidence because a place ID identifies exactly one
+ * listing — there is no matching step left to be wrong about.
+ */
 export function detailsToIntake(
   details: Record<string, unknown>,
-  domain: string,
-  match: MatchResult
+  domain: string
 ): IntakeResult {
   const now = new Date().toISOString();
   const entity = emptyEntityCandidates();
   const notes: string[] = [];
 
   const mapsUri = typeof details.googleMapsUri === "string" ? details.googleMapsUri : null;
-  const confidence = match.confident ? "high" : "low";
-  const p = (method: string) => provenance("places", mapsUri, method, confidence);
+  const p = (method: string) => provenance("places", mapsUri, method, "high");
 
   const displayName = details.displayName as Record<string, unknown> | undefined;
   if (typeof displayName?.text === "string") {
@@ -287,10 +219,12 @@ export function detailsToIntake(
     entity.phone.push({ value: details.nationalPhoneNumber, provenance: p("Places nationalPhoneNumber") });
   }
 
-  if (typeof details.websiteUri === "string") {
-    entity.gbpUrl.push({ value: mapsUri ?? details.websiteUri, provenance: p("Places googleMapsUri") });
-  } else if (mapsUri) {
+  if (mapsUri) {
     entity.gbpUrl.push({ value: mapsUri, provenance: p("Places googleMapsUri") });
+  }
+
+  if (typeof details.id === "string") {
+    entity.placeId.push({ value: details.id, provenance: p("Places id") });
   }
 
   const address = mapAddressComponents(details.addressComponents);
@@ -311,16 +245,17 @@ export function detailsToIntake(
   }
 
   // --- notes ---------------------------------------------------------------
-  if (!match.confident) {
-    notes.push(
-      `Match NOT corroborated — ${match.reasons.join("; ")}. Verify this is the right ` +
-        `business before promoting anything from it.`
-    );
-  }
-
   const status = typeof details.businessStatus === "string" ? details.businessStatus : null;
   if (status && status !== "OPERATIONAL") {
     notes.push(`Google lists this business as ${status}, not OPERATIONAL.`);
+  }
+
+  if (!address.city) {
+    notes.push(
+      "Google returned no address for this listing, so it is a service-area business. " +
+        "Nothing is wrong — it simply means the address fields stay empty and the listing " +
+        "cannot be found by any Google search, only by place ID."
+    );
   }
 
   if (typeof details.rating === "number") {
@@ -352,5 +287,3 @@ export function detailsToIntake(
     notes,
   };
 }
-
-export { searchPlaces };

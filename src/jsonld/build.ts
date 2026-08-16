@@ -1,4 +1,5 @@
 import type { KnowledgeSource } from "../api/types";
+import { validateJsonLd, type SchemaIssue } from "./validate";
 
 /**
  * Builds schema.org JSON-LD from the knowledge layer.
@@ -39,6 +40,8 @@ export interface JsonLdResult {
   /** Node types included, for reporting. */
   included: string[];
   warnings: string[];
+  /** Vocabulary problems found in the generated graph. */
+  issues: SchemaIssue[];
 }
 
 export async function buildJsonLd(
@@ -66,12 +69,19 @@ export async function buildJsonLd(
       "No published business profile — nothing can be emitted. Markup describing an " +
         "unidentifiable entity is worse than no markup."
     );
-    return { graph: { "@context": "https://schema.org", "@graph": [] }, included, warnings };
+    return {
+      graph: { "@context": "https://schema.org", "@graph": [] },
+      included,
+      warnings,
+      issues: [],
+    };
   }
 
   // --- the business -------------------------------------------------------
   const businessNode: Record<string, unknown> = {
-    "@type": options.schemaType,
+    // The profile owns this. `options.schemaType` remains only so a caller can
+    // preview a different type without editing the client.
+    "@type": business.schemaType || options.schemaType,
     "@id": businessId,
     name: business.name,
     url: base,
@@ -90,13 +100,125 @@ export async function buildJsonLd(
   if (business.address.region) address.addressRegion = business.address.region;
   if (business.address.postalCode) address.postalCode = business.address.postalCode;
   address.addressCountry = business.address.country;
-  businessNode.address = address;
+
+  // A service-area business hides its address on purpose, and it is usually a
+  // home. Publishing the street line would leak exactly what the owner chose
+  // not to show — so only the region is emitted, which is what makes the
+  // business locatable without exposing anyone.
+  if (business.businessType === "service_area") {
+    delete address.streetAddress;
+    businessNode.address = address;
+  } else {
+    businessNode.address = address;
+  }
 
   if (business.foundedYear) businessNode.foundingDate = String(business.foundedYear);
 
-  // sameAs is how a crawler ties this markup to the Google Business Profile —
-  // the corroboration that makes an entity resolvable rather than asserted.
-  if (business.gbpUrl) businessNode.sameAs = [business.gbpUrl];
+  // The Google category, stated in the markup. schema.org has no field for it,
+  // and additionalType is the accepted place for a classification the vocabulary
+  // cannot express — it says "this is a Plumber" in the customer's own words
+  // rather than leaving it implied by the @type alone.
+  if (business.primaryCategory) businessNode.additionalType = business.primaryCategory;
+
+  // sameAs is how a crawler ties this markup to every other profile of the same
+  // business — the corroboration that makes an entity resolvable rather than
+  // merely asserted. The GBP link belongs first; it is the strongest of them.
+  const sameAs = [
+    ...(business.gbpUrl ? [business.gbpUrl] : []),
+    ...business.sameAs.filter((url) => url !== business.gbpUrl),
+  ];
+  if (sameAs.length > 0) businessNode.sameAs = sameAs;
+
+  // --- identity & branding -------------------------------------------------
+  if (business.alternateName) businessNode.alternateName = business.alternateName;
+  if (business.slogan) businessNode.slogan = business.slogan;
+  if (business.logoUrl) businessNode.logo = business.logoUrl;
+  if (business.imageUrls.length > 0) businessNode.image = business.imageUrls;
+
+  // --- commerce ------------------------------------------------------------
+  if (business.priceRange) businessNode.priceRange = business.priceRange;
+  if (business.paymentAccepted.length > 0) {
+    // schema.org expects a single string here, comma-separated by convention.
+    businessNode.paymentAccepted = business.paymentAccepted.join(", ");
+  }
+  if (business.currenciesAccepted) businessNode.currenciesAccepted = business.currenciesAccepted;
+
+  // --- reach ---------------------------------------------------------------
+  // knowsLanguage, not availableLanguage: the latter belongs on ContactPoint
+  // and Service, and putting it on the business is simply wrong markup.
+  if (business.languages.length > 0) businessNode.knowsLanguage = business.languages;
+
+  if (business.geo) {
+    businessNode.geo = {
+      "@type": "GeoCoordinates",
+      latitude: business.geo.latitude,
+      longitude: business.geo.longitude,
+    };
+  }
+  if (business.hasMap) businessNode.hasMap = business.hasMap;
+
+  // --- scale & trust -------------------------------------------------------
+  if (business.numberOfEmployees) {
+    businessNode.numberOfEmployees = {
+      "@type": "QuantitativeValue",
+      value: business.numberOfEmployees,
+    };
+  }
+  if (business.awards.length > 0) businessNode.award = business.awards;
+  if (business.memberOf.length > 0) {
+    businessNode.memberOf = business.memberOf.map((name) => ({
+      "@type": "Organization",
+      name,
+    }));
+  }
+  if (business.founder) {
+    businessNode.founder = { "@type": "Person", name: business.founder };
+  }
+
+  // --- contact -------------------------------------------------------------
+  if (business.faxNumber) businessNode.faxNumber = business.faxNumber;
+  if (business.contactPoints.length > 0) {
+    businessNode.contactPoint = business.contactPoints.map((point) => ({
+      "@type": "ContactPoint",
+      contactType: point.contactType,
+      ...(point.phone ? { telephone: point.phone } : {}),
+      ...(point.email ? { email: point.email } : {}),
+    }));
+  }
+
+  // A booking link as a ReserveAction rather than a bare URL, so an agent can
+  // tell that following it books work rather than reading a page.
+  if (business.bookingUrl) {
+    businessNode.potentialAction = {
+      "@type": "ReserveAction",
+      target: {
+        "@type": "EntryPoint",
+        urlTemplate: business.bookingUrl,
+        actionPlatform: [
+          "https://schema.org/DesktopWebPlatform",
+          "https://schema.org/MobileWebPlatform",
+        ],
+      },
+      result: { "@type": "Reservation", name: "Service appointment" },
+    };
+  }
+
+  // --- registration identifiers -------------------------------------------
+  if (business.taxID) businessNode.taxID = business.taxID;
+  if (business.vatID) businessNode.vatID = business.vatID;
+  if (business.duns) businessNode.duns = business.duns;
+  if (business.leiCode) businessNode.leiCode = business.leiCode;
+  if (business.isicV4) businessNode.isicV4 = business.isicV4;
+  if (business.branchCode) businessNode.branchCode = business.branchCode;
+
+  // --- attributes the vocabulary has no field for --------------------------
+  if (business.attributes.length > 0) {
+    businessNode.additionalProperty = business.attributes.map((attribute) => ({
+      "@type": "PropertyValue",
+      name: attribute.name,
+      value: attribute.value,
+    }));
+  }
 
   const openHours = business.hours.filter((entry) => !entry.isClosed && entry.opens && entry.closes);
   if (openHours.length > 0) {
@@ -108,6 +230,20 @@ export async function buildJsonLd(
     }));
   } else {
     warnings.push("No opening hours published — one of the most commonly asked facts is missing.");
+  }
+
+  // Dated exceptions. A closure needs both validFrom and validThrough set to
+  // the same date — without them the entry reads as a permanent rule, which
+  // would say the business is shut for good.
+  if (business.specialHours.length > 0) {
+    businessNode.specialOpeningHoursSpecification = business.specialHours.map((entry) => ({
+      "@type": "OpeningHoursSpecification",
+      validFrom: entry.date,
+      validThrough: entry.date,
+      ...(entry.isClosed
+        ? { opens: "00:00", closes: "00:00" }
+        : { opens: entry.opens, closes: entry.closes }),
+    }));
   }
 
   // areaServed with real postal codes is what lets a crawler match a
@@ -181,11 +317,24 @@ export async function buildJsonLd(
     );
   }
 
-  return {
-    graph: { "@context": "https://schema.org", "@graph": nodes },
-    included,
-    warnings,
-  };
+  const graph = { "@context": "https://schema.org", "@graph": nodes };
+
+  // Validate what was actually produced, not what was intended. Every warning
+  // above is a judgment about content; these are facts about the vocabulary,
+  // and they catch the class of mistake that looks correct in review — a
+  // property on the wrong type is silently dropped by crawlers and nothing
+  // anywhere reports it.
+  const issues = validateJsonLd(graph);
+  const errors = issues.filter((issue) => issue.severity === "error");
+  if (errors.length > 0) {
+    warnings.push(
+      `${errors.length} invalid schema.org propert${errors.length === 1 ? "y" : "ies"} — ` +
+        `crawlers will ignore ${errors.length === 1 ? "it" : "them"}:`
+    );
+    for (const issue of errors) warnings.push(`    ${issue.path} — ${issue.message}`);
+  }
+
+  return { graph, included, warnings, issues };
 }
 
 /** Wraps the graph in a script tag, ready to paste into a page head. */

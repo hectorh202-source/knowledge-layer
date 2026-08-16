@@ -26,8 +26,20 @@
   },
   "gbpUrl": "TODO — Google Business Profile URL. The strongest corroboration signal there is.",
   "foundedYear": null,
-  "responseTime": "TODO — a citable specific, e.g. 'Same-day service, within 2 hours for emergencies'",
-  "emergencyService": false,
+  "primaryCategory": "TODO — the primary category from Google Business Profile, verbatim, e.g. 'Plumber'",
+  "businessType": "storefront",
+  "_businessTypeComment": [
+    "storefront   — customers come to a premises, so the address publishes.",
+    "service_area — you travel to customers. The street address is withheld",
+    "               from published markup, because it is usually a home.",
+    "hybrid       — both."
+  ],
+  "sameAs": [],
+  "_sameAsComment": [
+    "Full URLs to this business elsewhere: Facebook, Yelp, BBB, Angi, LinkedIn.",
+    "One source claiming a fact is an assertion. Several independent profiles",
+    "agreeing is corroboration, and corroboration is what earns a citation."
+  ],
   "_hoursComment": [
     "day: 0 = Sunday through 6 = Saturday. 24-hour times.",
     "Set isClosed true for days you are closed.",

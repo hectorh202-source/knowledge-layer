@@ -48,19 +48,11 @@ export class FileSource implements KnowledgeSource {
 
     const [services, areas] = await Promise.all([this.services(), this.serviceAreas()]);
 
+    // Spread rather than restate. `loadProfile` has already validated and
+    // normalized every field, and copying them by hand only creates a list to
+    // forget to update.
     return {
-      name: profile.name,
-      legalName: profile.legalName,
-      description: profile.description,
-      phone: profile.phone,
-      email: profile.email,
-      domain: profile.domain,
-      address: profile.address,
-      gbpUrl: profile.gbpUrl,
-      foundedYear: profile.foundedYear,
-      responseTime: profile.responseTime,
-      emergencyService: profile.emergencyService,
-      hours: profile.hours,
+      ...profile,
       serviceCount: services.length,
       serviceAreaCount: areas.length,
     };

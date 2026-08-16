@@ -18,7 +18,7 @@ import {
   type ServiceAreaEntry,
   type ServiceEntry,
 } from "../data/content";
-import type { Candidate, IntakeResult } from "./types";
+import { emptyEntityCandidates, type Candidate, type IntakeResult } from "./types";
 import { intakeDir, profilePath, readSettings } from "../tenancy/store";
 
 /**
@@ -91,11 +91,19 @@ function best<T>(candidates: Candidate<T>[]): { value: T; method: string } | nul
 function mergeIntake(results: IntakeResult[]): IntakeResult {
   const merged = results[0];
 
+  // Start from the full field list rather than from whatever the first file
+  // happens to contain. Intake files are written to disk and read back weeks
+  // later, so any field added to EntityCandidates after a crawl ran is simply
+  // absent from that file — and iterating one file's keys while indexing
+  // another's crashed the whole promote when that happened.
+  merged.entity = { ...emptyEntityCandidates(), ...merged.entity };
+
   for (const next of results.slice(1)) {
     for (const key of Object.keys(merged.entity) as (keyof typeof merged.entity)[]) {
       // Each field is a homogeneous candidate array; the cast keeps the loop
       // generic without widening the public types.
-      (merged.entity[key] as unknown[]).push(...(next.entity[key] as unknown[]));
+      const incoming = next.entity[key] as unknown[] | undefined;
+      if (Array.isArray(incoming)) (merged.entity[key] as unknown[]).push(...incoming);
     }
 
     merged.faqs.push(...next.faqs);

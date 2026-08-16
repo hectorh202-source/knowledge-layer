@@ -55,6 +55,17 @@ export interface EntityCandidates {
   postalCode: Candidate<string>[];
   foundedYear: Candidate<number>[];
   gbpUrl: Candidate<string>[];
+  /**
+   * Google place ID found in the site's own markup.
+   *
+   * Less a fact about the business than the key that unlocks every other one.
+   * Home-services clients are usually service-area businesses with hidden
+   * addresses, and Google's search surfaces — Text Search and Autocomplete
+   * alike — do not return those, so the listing cannot be found by name however
+   * live it is. Their embedded maps and review widgets carry the ID, which makes
+   * the customer's own website the most reliable route to their Google profile.
+   */
+  placeId: Candidate<string>[];
   hours: Candidate<{ day: number; opens: string | null; closes: string | null; isClosed: boolean }>[];
 }
 
@@ -116,6 +127,7 @@ export function emptyEntityCandidates(): EntityCandidates {
     postalCode: [],
     foundedYear: [],
     gbpUrl: [],
+    placeId: [],
     hours: [],
   };
 }

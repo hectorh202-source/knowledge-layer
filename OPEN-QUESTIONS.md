@@ -274,14 +274,126 @@ stale record.
 approved automatically. Someone has to verify these against the state license lookup.
 
 ### 4.11 The Places API integration is untested against a live call
-**Status:** OPEN — needs a key to verify
-Written against the Places API (New): `POST places:searchText` and `GET places/{id}`, authenticated
-with `X-Goog-Api-Key` and a `X-Goog-FieldMask` header. Endpoint paths, field mask names, and the
-response shape are all from knowledge, not from a real response. The error path (missing key) is
-tested; nothing else is.
-**Most likely to be wrong:** field mask names, `addressComponents` type strings, and the
-`regularOpeningHours.periods` shape.
-**Resolves when:** a `GOOGLE_MAPS_API_KEY` exists and it runs once.
+**Status:** RESOLVED — 2026-08-15, verified against live responses
+`POST places:searchText` with `X-Goog-Api-Key` + `X-Goog-FieldMask` returns HTTP 200 and the expected
+`places[].displayName.text` / `formattedAddress` / `nationalPhoneNumber` / `websiteUri` shape. The
+endpoint paths and search field mask are correct as written.
+**Still unverified:** the *details* call — `addressComponents` type strings and the
+`regularOpeningHours.periods` shape have not been exercised, because no test business has matched
+confidently yet. Those remain the most likely things to be wrong.
+**First failure was not code:** `Requests to this API ... are blocked` is the Google Cloud key
+restriction error, not a bad request. It means the request reached Google and was refused before
+execution — so it also proved the endpoint path was valid.
+
+### 4.11a Service-area businesses are invisible to Places Text Search
+**Status:** ANSWERED — 2026-08-15. **This is a product-shaping constraint, not an edge case.**
+Searching Places for the test business returned nothing under any query: the exact listing name, the
+distinctive word "Chucker" globally, the name plus city, the phone number, and a tight
+`locationRestriction` rectangle over its city. The same rectangle happily returned twenty
+competitors. The obvious conclusion — that the listing was unverified or unpublished — was **wrong**.
+It is live, `OPERATIONAL`, rated 5.0 from 60 reviews, and fetching `places/{id}` directly works
+perfectly.
+**Cause:** the Places details response carries no `formattedAddress` and no `addressComponents`. It
+is a service-area business with a hidden street address, and Google's Text Search does not return
+address-less businesses. They are reachable by place ID and effectively only by place ID.
+**Why this shapes the product:** SAB-with-hidden-address is the *norm* in home services — plumbers,
+haulers, HVAC, electricians, locksmiths. That is the entire target market. Search-by-name is
+therefore the exception path and place ID is the main road.
+**Consequences taken:** `sources.googlePlaceId` added to tenant settings with a field in Settings →
+Content sources; Places intake uses it before attempting any search; the zero-results message now
+explains SABs instead of blaming verification.
+**Finding the ID without asking the owner:** the client's own site usually carries it. `ChIJ…` and
+`cid=` appear in embedded maps and review widgets — grepping three pages of the test site found it
+immediately. Worth automating into the crawl.
+
+### 4.11c Autocomplete does not rescue name lookup — the site does
+**Status:** ANSWERED — 2026-08-15, autocomplete tested and rejected
+The obvious fix for "name search doesn't work" is the SaaS-standard autocomplete dropdown, backed by
+`places:autocomplete`. Tested: it does not return the SAB either. Unbiased it returned a similarly
+named business in Ottawa, Canada; with a `locationRestriction` circle over the client's own city it
+returned `{}`. Both Places search surfaces exclude address-less businesses, so a dropdown would show
+the client's competitors and never the client.
+**What works instead:** the client's own website. `ChIJ…` and `cid=` appear in embedded maps and
+review widgets, and a place ID is an opaque Google-issued identifier, so finding one on a site is
+near-proof of which listing that site belongs to — the one high-confidence signal in the whole
+heuristic extractor.
+**Built:** `extractPlaceIds` in the crawl, `entity.placeId` candidates, and Places intake resolving
+the ID from Settings → crawl → search in that order. Verified against the live site.
+**Ordering consequence:** the Sources page now runs Website before Google Places, because Places
+depends on the crawl having found the ID.
+**Still open:** an autocomplete dropdown remains worth building for clients that *do* publish an
+address, but it cannot be the primary path.
+
+### 4.11f All search paths removed — place ID or manual entry, nothing else
+**Status:** DECIDED — 2026-08-15
+Everything built to work around the SAB problem was deleted: the name-search ladder, the
+corroboration matcher, and the legacy phone lookup. `searchPlaces`, `matchPlace`, `findPlaceByPhone`
+and their supporting helpers are gone.
+**Why, given phone lookup demonstrably worked:** it worked for businesses Google already indexes,
+which are exactly the ones least likely to need help. It did nothing for the clients this product
+targets. Keeping it meant three code paths, three failure messages and three ways to import the
+wrong company, in exchange for a case the crawl already covers.
+**What remains:** `fetchPlaceDetails` by place ID and `parsePlaceId`. The ID comes from Settings or
+from the crawl. No ID means the business is entered by hand, which is a smaller cost than a fallback
+that fails differently each time.
+**Wrong-business risk is now structurally gone** rather than mitigated — a place ID identifies
+exactly one listing, so there is no matching step left to get wrong. The `expectName`/`expectPhone`
+corroboration machinery went with it.
+**Size:** `places.ts` and `run-places.ts` together are 437 lines, down from roughly 700.
+
+### 4.11e Phone lookup works, and still cannot reach a hidden-address SAB
+**Status:** SUPERSEDED by 4.11f — the finding stands, the code was removed.
+Places API (New) has no phone lookup; the legacy `findplacefromtext` endpoint does, via
+`inputtype=phonenumber`. Built as `findPlaceByPhone`, wired ahead of name search, and it **works** —
+control tests resolved two indexed businesses straight to their place IDs from nothing but a phone
+number. Since the crawl already extracts the phone from the client's site, that is a real automatic
+route for any client Google indexes normally.
+**It does not solve SABs.** The test business returns `ZERO_RESULTS` by phone exactly as it does by
+name.
+**Seven surfaces now tested against one live, verified, 5.0-rated listing, all failing:**
+Places (New) Text Search; Places (New) Autocomplete unbiased, location-biased and
+location-restricted; legacy Find Place by name; legacy Text Search by name; legacy Autocomplete;
+legacy Find Place by phone; and scraping the rendered Maps page, which contains no `ChIJ` string at
+all — only a hex CID pair and a `/g/` Knowledge Graph ID, neither convertible.
+**Settled conclusion:** there is no name-based or phone-based route to a service-area business that
+hides its address. This is deliberate on Google's part — SABs are largely home-based, and a
+queryable API would publish home addresses in bulk. Treat it as a fixed constraint, not a gap to
+engineer around.
+**The three routes that do work:** the place ID off the client's own site (automatic, built), a
+review link the client sends (`writereview?placeid=…`, parsed, built), or the GBP API after they
+authorize (4.11d).
+**Lookup order now implemented:** place ID → phone → name.
+
+### 4.11d Business Profile API — the answer for onboarded clients, not for lookup
+**Status:** OPEN — decision pending, access not requested
+The GBP API is not a search API. There is no "find any business by name"; it lists only locations the
+authenticated account manages, so it cannot replace Places for pre-sale research on a business that
+has not hired us.
+**What it does solve:** once a client grants access — normally by adding the agency as a manager,
+which agencies do anyway — `accounts.locations.list` returns their locations directly. No searching,
+no place ID hunting, and the SAB problem disappears entirely because we are not searching.
+**What it adds beyond Places:** service areas, categories, attributes, Q&A, posts, reviews, and
+crucially **write access** — hours, description and services can be corrected at the source rather
+than only mirrored. For an AEO product that is a different class of capability.
+**It also dissolves 4.12:** the caching restriction on Places data does not apply the same way to a
+client's own data accessed with their authorization.
+**Cost:** Google gates the Business Profile APIs behind an access request that takes days to weeks.
+If it is wanted, the application should go in early rather than when it is needed.
+**Shape it points to:** Places for the pre-sale pitch with zero customer involvement, GBP API once
+they sign.
+
+### 4.11b Google's 24/7 hours shape silently produced a six-day closure
+**Status:** FIXED — 2026-08-15, verified against the live payload
+A business open around the clock returns a *single* period — `{open: {day: 0, hour: 0, minute: 0}}`
+with no `close` and no other days listed. `mapOpeningHours` read that literally as "open Sunday,
+closed Monday through Saturday" and filled the remaining six days with `isClosed: true`.
+**Impact had it shipped:** a 24/7 emergency-service business would have published JSON-LD stating it
+was closed six days a week — worse than publishing no hours at all, and precisely the kind of fact an
+answer engine repeats verbatim.
+**Fix:** a lone period opening at midnight with no close maps to all seven days open. Verified by
+running the live payload through `detailsToIntake`.
+**Caught only because** the details call finally ran against a real listing — 4.11 flagged this shape
+as the most likely thing to be wrong, and it was.
 
 ### 4.12 Google restricts caching Places data
 **Status:** ANSWERED — constraint, design around it
@@ -298,9 +410,53 @@ republishing the reviews themselves is someone else's copyrighted content.
 **Status:** ANSWERED — mitigated, worth knowing
 Promoting another company's hours and phone number into a customer's profile would be worse than
 having neither. "First search result" is not sufficient evidence.
-**Rule:** a match is only `confident` when the phone number or website domain corroborates it. An
-uncorroborated match is still written out, but flagged loudly and marked low confidence so `best()`
-scoring won't let it outrank website data.
+**Rule:** a match is only `confident` when the phone number or website domain corroborates it.
+**Revised 2026-08-15 — an uncorroborated match now writes nothing at all.** Flagging it as low
+confidence was not enough: the candidate still landed in the intake file, still appeared in the
+review queue, and could still be approved by someone skimming. A live search proved the risk is
+routine rather than theoretical — a loose query for the test business returned three unrelated junk
+removal companies, and the old code would have imported the first one's phone, address and hours.
+**Escape hatch:** the run prints the shortlist with place IDs and stops. Pasting a place ID into the
+Place ID field skips the search and imports that place — a human reading the list and choosing *is*
+the corroboration.
+**Corroboration signals:** phone, website domain, or an exact match against the Settings business
+name (punctuation-normalised, so `X - Y & Z` equals `X Y and Z`). Exact only — a partial name match
+is the one signal most likely to be wrong in precisely the cases that matter.
+
+### 4.13a The Settings business name is the sole source of truth for finding the listing
+**Status:** ANSWERED — 2026-08-15, fallbacks removed
+Places intake originally searched on the name extracted by the website crawl and never read the
+Settings name at all — the field a person fills in first when setting up a business. Fixing that as a
+priority order (Settings name, then crawled name, then domain) was still wrong.
+**Rule:** the Settings name is searched and nothing else. If it finds nothing, the run stops. If it
+is empty, the run refuses before making any API call.
+**Why no fallback:**
+- A fallback can answer with a *different business*. Searching this client's domain returned a
+  competitor, "Chuck That Junk LLC" — which would then have been matched and imported.
+- A fallback that succeeds hides the real defect. If a wrong Settings name still "works" because
+  something else rescued it, nobody ever learns the field is wrong.
+- It contradicts the product. This app exists so one entity resolves to one business across GBP,
+  website and markup. An intake quietly searching under three different names tolerates exactly the
+  inconsistency it sells a fix for.
+**Not a fallback:** appending city/state to the *same* name when the name alone returns nothing.
+Same source of truth, narrower search.
+
+### 4.13b The portal ran CLI tools through a Windows shell, unquoted
+**Status:** FIXED — 2026-08-15
+`runScript` in `src/admin/routes.ts` called `npx.cmd` with `shell: true` on Windows. `execFile` with
+`shell: true` pastes the argument array into a single command string with no quoting, so cmd.exe
+re-parsed it.
+**How it surfaced:** searching Places for `Junk Chucker - Junk Removal & Hauling` actually searched
+for `Junk`, and cmd.exe tried to run `Hauling` as a separate command. Every space split an argument
+and the `&` terminated the command.
+**Why it mattered more than a mangled search:** every value a person types into the portal reaches
+this function. `&`, `|`, `>` and `^` were live command injection into our own shell. The portal binds
+to 127.0.0.1 and has no authentication yet, so the blast radius was local — but this becomes remote
+the moment it is exposed, which is on the roadmap.
+**Fix:** run `process.execPath` against `node_modules/tsx/dist/cli.mjs` directly. No shell and no
+`.cmd` shim, so arguments pass as an array the whole way down and are never re-parsed. Verified: a
+name containing `&` and spaces arrives at `process.argv` intact as one element.
+**Worth auditing:** any other `shell: true` or string-concatenated command in this codebase.
 
 ### 4.14 The full GBP API is still unbuilt
 **Status:** OPEN — deliberate

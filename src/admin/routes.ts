@@ -156,16 +156,37 @@ function countPendingIntake(slug: string): Record<string, number> & { total: num
   return pending;
 }
 
+/**
+ * tsx's CLI entry, resolved rather than assumed.
+ *
+ * `require.resolve("tsx")` would give the library export, not the executable,
+ * and the `.bin/tsx` shim is a shell script — the one thing this must avoid.
+ */
+const TSX_CLI = path.join(process.cwd(), "node_modules", "tsx", "dist", "cli.mjs");
+
 /** Runs one of the CLI tools and streams back its output. */
 function runScript(
   script: string,
   args: string[]
 ): Promise<{ ok: boolean; output: string }> {
   return new Promise((resolve) => {
+    // No shell, ever.
+    //
+    // This used to run `npx.cmd` with `shell: true` on Windows, which pastes
+    // the arguments into one command string with no quoting. A business named
+    // "Junk Chucker - Junk Removal & Hauling" therefore searched for "Junk",
+    // and cmd.exe tried to run "Hauling" as a separate command — the `&`
+    // terminated the first one. Anything a person can type into the portal
+    // reaches this function, so `&`, `|`, `>` and friends were live command
+    // injection into our own shell, not merely a mangled search.
+    //
+    // Running node against tsx's CLI entry directly skips the shell and the
+    // .cmd shim together, so arguments are passed as an array the whole way
+    // down and never re-parsed.
     execFile(
-      process.platform === "win32" ? "npx.cmd" : "npx",
-      ["tsx", script, ...args],
-      { cwd: process.cwd(), timeout: 300_000, maxBuffer: 8 * 1024 * 1024, shell: process.platform === "win32" },
+      process.execPath,
+      [TSX_CLI, script, ...args],
+      { cwd: process.cwd(), timeout: 300_000, maxBuffer: 8 * 1024 * 1024 },
       (error, stdout, stderr) => {
         resolve({
           ok: !error,
@@ -269,15 +290,14 @@ export function createAdminRouter(): Router {
       const current = readSettings(req.params.slug);
       if (!current) throw new Error("Client not found.");
 
+      // name, domain and schemaType are deliberately not settable here. They
+      // belong to the business profile, and accepting them would let a stale
+      // Settings page write an old name back over a fresh profile edit —
+      // reintroducing the drift this endpoint used to cause. The values on
+      // `current` are read straight from the profile, so they round-trip
+      // unchanged.
       const next: TenantSettings = {
         ...current,
-        name: typeof req.body.name === "string" ? req.body.name : current.name,
-        domain:
-          typeof req.body.domain === "string"
-            ? req.body.domain.replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "")
-            : current.domain,
-        schemaType:
-          typeof req.body.schemaType === "string" ? req.body.schemaType : current.schemaType,
         apiBaseUrl:
           typeof req.body.apiBaseUrl === "string" ? req.body.apiBaseUrl : current.apiBaseUrl,
         notes: typeof req.body.notes === "string" ? req.body.notes : current.notes,
@@ -420,10 +440,19 @@ export function createAdminRouter(): Router {
   router.post("/clients/:slug/intake/places", async (req: Request, res: Response) => {
     const slug = req.params.slug;
     const args = ["--tenant", slug];
-    if (typeof req.body?.query === "string" && req.body.query.trim()) {
-      args.push("--query", req.body.query.trim());
+    if (typeof req.body?.placeId === "string" && req.body.placeId.trim()) {
+      args.push("--place-id", req.body.placeId.trim());
     }
     const result = await runScript("src/intake/run-places.ts", args);
+    res.json(result);
+  });
+
+  router.post("/clients/:slug/generate/brand-faqs", async (req: Request, res: Response) => {
+    const result = await runScript("src/content/generate-brand-faqs.ts", [
+      "--tenant",
+      req.params.slug,
+      ...(req.body?.dryRun === true ? ["--dry-run"] : []),
+    ]);
     res.json(result);
   });
 

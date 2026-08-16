@@ -120,8 +120,44 @@ async function main(): Promise<void> {
       country: profile.address.country,
       gbp_url: profile.gbpUrl,
       founded_year: profile.foundedYear,
-      response_time: profile.responseTime,
-      emergency_service: profile.emergencyService,
+      primary_category: profile.primaryCategory,
+      business_type: profile.businessType,
+      schema_type: profile.schemaType,
+      same_as: profile.sameAs,
+
+      alternate_name: profile.alternateName,
+      slogan: profile.slogan,
+      logo_url: profile.logoUrl,
+      image_urls: profile.imageUrls,
+
+      price_range: profile.priceRange,
+      payment_accepted: profile.paymentAccepted,
+      currencies_accepted: profile.currenciesAccepted,
+
+      languages: profile.languages,
+      geo_latitude: profile.geo?.latitude ?? null,
+      geo_longitude: profile.geo?.longitude ?? null,
+      has_map: profile.hasMap,
+
+      number_of_employees: profile.numberOfEmployees,
+      awards: profile.awards,
+      member_of: profile.memberOf,
+      founder: profile.founder,
+
+      fax_number: profile.faxNumber,
+      contact_points: profile.contactPoints,
+      booking_url: profile.bookingUrl,
+
+      special_hours: profile.specialHours,
+
+      tax_id: profile.taxID,
+      vat_id: profile.vatID,
+      duns: profile.duns,
+      lei_code: profile.leiCode,
+      isic_v4: profile.isicV4,
+      branch_code: profile.branchCode,
+
+      attributes: profile.attributes,
       // Publishing is an explicit act — loading a draft must never make it live.
       is_published: publish,
     },

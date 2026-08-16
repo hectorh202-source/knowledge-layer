@@ -63,8 +63,68 @@ create table business_profile (
   gbp_url           text,
 
   founded_year      integer,
-  response_time     text,
-  emergency_service boolean not null default false,
+
+  -- Google's primary category, verbatim. Free text rather than an enum: the
+  -- category list is Google's and it changes, and a stale enum would reject
+  -- categories that are perfectly valid.
+  primary_category  text,
+
+  -- Decides whether a street address is published at all. A service-area
+  -- business is usually run from a home, and its address is hidden on purpose.
+  business_type     text not null default 'storefront'
+                      check (business_type in ('storefront', 'service_area', 'hybrid')),
+
+  -- schema.org @type for the business node — Plumber, HVACBusiness. Lives with
+  -- the profile rather than in app settings because it publishes.
+  schema_type       text not null default 'LocalBusiness',
+
+  -- Profiles of the same business elsewhere, published as schema.org sameAs.
+  -- Corroboration across independent sources is what earns a citation.
+  same_as           text[] not null default '{}',
+
+  -- Identity and branding.
+  alternate_name    text,
+  slogan            text,
+  logo_url          text,
+  image_urls        text[] not null default '{}',
+
+  -- Commerce.
+  price_range         text,
+  payment_accepted    text[] not null default '{}',
+  currencies_accepted text,
+
+  -- Reach. Coordinates are two columns rather than a point so they can be
+  -- indexed and queried by distance; the API reassembles them.
+  languages         text[] not null default '{}',
+  geo_latitude      double precision,
+  geo_longitude     double precision,
+  has_map           text,
+
+  -- Scale and trust.
+  number_of_employees integer,
+  awards              text[] not null default '{}',
+  member_of           text[] not null default '{}',
+  founder             text,
+
+  -- Contact beyond the canonical NAP number.
+  fax_number        text,
+  contact_points    jsonb not null default '[]',
+  booking_url       text,
+
+  -- Dated exceptions to the weekly hours.
+  special_hours     jsonb not null default '[]',
+
+  -- Registration identifiers.
+  tax_id            text,
+  vat_id            text,
+  duns              text,
+  lei_code          text,
+  isic_v4           text,
+  branch_code       text,
+
+  -- Google Business Profile attributes with no schema.org property of their
+  -- own — "veteran-owned", "free estimates". Published as additionalProperty.
+  attributes        jsonb not null default '[]',
 
   is_published      boolean not null default false,
   reviewed_at       timestamptz,

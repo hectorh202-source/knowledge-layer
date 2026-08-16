@@ -9,7 +9,12 @@ dist/
 
 # Exports and everything derived from them contain real customer and revenue
 # data. Kept local, never committed.
-data/
+#
+# Anchored with a leading slash. Unanchored, this matches a directory named
+# "data" at any depth — which silently excluded src/data/ and kept two core
+# source files, profile.ts and content.ts, out of the repository entirely. A
+# fresh clone would not have compiled.
+/data/
 
 # Intake output — extracted candidates from customer sites.
 # Unreviewed third-party content; not committed.

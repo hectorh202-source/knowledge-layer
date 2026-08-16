@@ -242,12 +242,40 @@ function contentView(kind){
     '</div>'+
     '<div class="card"><div class="card-h"><h2>Add by hand</h2></div><div class="card-b">'+
       '<div class="cols2">'+fields+'</div>'+
-      '<button class="btn primary" id="addItem">Add</button></div></div>';
+      '<button class="btn primary" id="addItem">Add</button></div></div>'+
+    (kind==="brands" ? brandFaqCard(sec) : "");
+}
+
+/**
+ * Turning brands into readable answers.
+ *
+ * On the Brands page rather than Q&A because that is where someone is looking
+ * at the list and can see what it will produce.
+ */
+function brandFaqCard(sec){
+  const approved = sec.approved;
+  return '<div class="card"><div class="card-h"><h2>Generate FAQs from these brands</h2>'+
+    '<span class="meta">'+approved+' approved brand'+(approved===1?"":"s")+'</span></div><div class="card-b">'+
+    '<div class="sub" style="margin:0 0 .7rem">A brand on its own publishes as <code>knowsAbout</code> &mdash; a bare name with no stated relationship, which Google '+
+    'ignores for rich results and an assistant can do little with. &ldquo;Do you service Trane?&rdquo; with a real answer is the format answer engines quote most directly.</div>'+
+    '<div class="sub" style="margin:0 0 .7rem">Uses <strong>approved brands only</strong>, and writes answers from facts already held &mdash; business name, approved service areas, phone. '+
+    'Nothing about pricing, response times or whether they install as well as repair, because none of that is known here.</div>'+
+    (approved===0
+      ? '<div class="empty">Approve at least one brand first.</div>'
+      : '<div class="row"><button class="btn" data-gen="brand-faqs-dry">Preview</button>'+
+        '<button class="btn primary" data-gen="brand-faqs">Generate</button></div>'+
+        '<pre id="genOut" style="margin-top:.7rem">Nothing generated yet.</pre>')+
+    '</div></div>';
 }
 
 function profileView(){
-  const p = detail.profile, a = p.address||{};
-  const f=(k,l,v)=>'<label class="f"><span>'+l+'</span><input data-p="'+k+'" value="'+esc(v??"")+'"></label>';
+  const p = detail.profile, a = p.address||{}, g = p.geo||{};
+  const f=(k,l,v,ph)=>'<label class="f"><span>'+l+'</span><input data-p="'+k+'" value="'+esc(v??"")+
+    '"'+(ph?' placeholder="'+esc(ph)+'"':"")+'></label>';
+  // A plain string list is one value per line. Simpler to edit than a row of
+  // inputs with add/remove buttons, and it pastes straight out of a spreadsheet.
+  const list=(k,l,v,hint)=>'<label class="f"><span>'+l+'</span>'+
+    '<textarea data-p="'+k+'" placeholder="'+esc(hint||"")+'">'+esc((v||[]).join("\n"))+'</textarea></label>';
   const blocking = detail.validation.blocking;
 
   return '<h1>Business profile</h1><div class="sub">Who this business is. Without name, phone and location an answer engine cannot resolve it at all.</div>'+
@@ -258,16 +286,128 @@ function profileView(){
       f("name","Business name",p.name)+f("legalName","Legal name",p.legalName)+
       f("phone","Phone (canonical NAP)",p.phone)+f("email","Email",p.email)+
       f("domain","Domain",p.domain)+f("gbpUrl","Google Business Profile URL",p.gbpUrl)+
-      f("foundedYear","Founded",p.foundedYear)+f("responseTime","Response time",p.responseTime)+
+      f("foundedYear","Founded",p.foundedYear)+
+      '<label class="f"><span>schema.org type</span><select data-p="schemaType">'+
+        ["LocalBusiness","Plumber","HVACBusiness","Electrician","RoofingContractor","GeneralContractor","HomeAndConstructionBusiness","MovingCompany","Locksmith","HousePainter"]
+          .map(t=>'<option '+(t===(p.schemaType||"LocalBusiness")?"selected":"")+'>'+t+'</option>').join("")+'</select></label>'+
     '</div><label class="f"><span>Description</span><textarea data-p="description">'+esc(p.description??"")+'</textarea></label>'+
     '</div></div>'+
-    '<div class="card"><div class="card-h"><h2>Address</h2></div><div class="card-b"><div class="cols2">'+
+    '<div class="card"><div class="card-h"><h2>How customers are served</h2></div><div class="card-b">'+
+      '<div class="sub">Decides whether an address is published at all. A service-area business publishing a home address is a privacy problem; '+
+      'one publishing no served areas cannot be matched to &ldquo;near me&rdquo;.</div>'+
+      '<label class="f"><span>Business type</span><select data-p="businessType">'+
+        ['storefront','service_area','hybrid'].map(v=>'<option value="'+v+'"'+((p.businessType||'storefront')===v?' selected':'')+'>'+
+          (v==='storefront'?'Storefront — customers come to us':v==='service_area'?'Service area — we travel to customers':'Hybrid — both')+'</option>').join("")+
+      '</select></label>'+
+      '<label class="f"><span>Primary Google category</span><input data-p="primaryCategory" value="'+esc(p.primaryCategory??"")+'" placeholder="e.g. Plumber, Junk removal service"></label>'+
+      '<div class="sub" style="margin:.2rem 0 0">Copy it verbatim from the Google Business Profile. It is the field Google matches queries against.</div>'+
+    '</div></div>'+
+    '<div class="card"><div class="card-h"><h2>Address</h2>'+
+      ((p.businessType==="service_area")?'<span class="meta">optional for a service-area business</span>':"")+'</div><div class="card-b"><div class="cols2">'+
       f("address.street","Street",a.street)+f("address.city","City",a.city)+
       f("address.region","State",a.region)+f("address.postalCode","ZIP",a.postalCode)+
     '</div></div></div>'+
-    '<div class="card"><div class="card-h"><h2>Hours</h2><span class="meta">'+detail.openDays+' open days of 7</span></div>'+
-      '<div class="card-b"><div class="sub" style="margin:0">Google Places fills these. A day that is neither closed nor has times is treated as unknown, not open.</div></div></div>'+
+    hoursCard(p.hours||[])+
+    '<div class="card"><div class="card-h"><h2>Other profiles</h2><span class="meta">'+((p.sameAs||[]).length)+' linked</span></div><div class="card-b">'+
+      '<div class="sub">Facebook, Yelp, BBB, Angi, LinkedIn. This is how an answer engine confirms the business here is the same one it has seen elsewhere &mdash; '+
+      'one source is an assertion, several agreeing is corroboration, and corroboration is what earns a citation.</div>'+
+      '<textarea data-p="sameAs" placeholder="One URL per line">'+esc((p.sameAs||[]).join("\n"))+'</textarea>'+
+      '<div class="sub" style="margin:.2rem 0 0">One per line, full URLs including https://.</div>'+
+    '</div></div>'+
+
+    '<div class="card"><div class="card-h"><h2>Branding</h2></div><div class="card-b"><div class="cols2">'+
+      f("alternateName","Trading name / DBA",p.alternateName)+f("slogan","Slogan",p.slogan)+
+      f("logoUrl","Logo URL",p.logoUrl)+f("founder","Founder",p.founder)+
+    '</div>'+
+    list("imageUrls","Photo URLs",p.imageUrls,"One full URL per line — vehicles, crew, completed work")+
+    '</div></div>'+
+
+    '<div class="card"><div class="card-h"><h2>Commerce</h2></div><div class="card-b"><div class="cols2">'+
+      f("priceRange","Price range",p.priceRange,"$ to $$$$")+
+      f("currenciesAccepted","Currency",p.currenciesAccepted,"USD")+
+    '</div>'+
+    list("paymentAccepted","Payments accepted",p.paymentAccepted,"One per line — Cash, Credit Card, Check, Financing")+
+    '<div class="sub" style="margin:.2rem 0 0">Price range and payment methods are two of the things an assistant leans on hardest when deciding who to name.</div>'+
+    '</div></div>'+
+
+    '<div class="card"><div class="card-h"><h2>Location &amp; reach</h2></div><div class="card-b"><div class="cols2">'+
+      f("geo.latitude","Latitude",g.latitude)+f("geo.longitude","Longitude",g.longitude)+
+      f("hasMap","Map URL",p.hasMap)+f("branchCode","Branch code",p.branchCode)+
+    '</div>'+
+    list("languages","Languages",p.languages,"One per line — English, Spanish")+
+    '<div class="sub" style="margin:.2rem 0 0">Coordinates publish for every business type, including service-area. Unlike a street address they expose no doorstep when set to the middle '+
+    'of the area served, and they are what let a crawler answer &ldquo;near me&rdquo; at all.</div>'+
+    '</div></div>'+
+
+    '<div class="card"><div class="card-h"><h2>Trust signals</h2></div><div class="card-b"><div class="cols2">'+
+      f("numberOfEmployees","Employees",p.numberOfEmployees)+f("bookingUrl","Booking URL",p.bookingUrl)+
+    '</div>'+
+    list("memberOf","Associations",p.memberOf,"One per line — BBB, PHCC, NATE")+
+    list("awards","Awards",p.awards,"One per line")+
+    '</div></div>'+
+
+    '<div class="card"><div class="card-h"><h2>Attributes</h2><span class="meta">'+((p.attributes||[]).length)+'</span></div><div class="card-b">'+
+      '<div class="sub">The Google Business Profile toggles schema.org has no field for &mdash; veteran-owned, free estimates, wheelchair accessible. '+
+      'They answer real questions, so they publish as additionalProperty rather than being dropped.</div>'+
+      '<textarea data-p="attributes" placeholder="One per line: Name = Value, or just Name for a yes">'+
+        esc((p.attributes||[]).map(a=>a.value&&a.value!=="Yes"?a.name+" = "+a.value:a.name).join("\n"))+'</textarea>'+
+    '</div></div>'+
+
+    '<div class="card"><div class="card-h"><h2>Additional contacts</h2></div><div class="card-b"><div class="cols2">'+
+      f("faxNumber","Fax",p.faxNumber)+
+    '</div>'+
+      '<div class="sub">Extra lines beyond the canonical NAP number, typed so a crawler knows which is which.</div>'+
+      '<textarea data-p="contactPoints" placeholder="One per line: type | phone | email &mdash; e.g. emergency | 941-555-0100 |">'+
+        esc((p.contactPoints||[]).map(c=>[c.contactType,c.phone||"",c.email||""].join(" | ")).join("\n"))+'</textarea>'+
+    '</div></div>'+
+
+    '<div class="card"><div class="card-h"><h2>Holiday &amp; special hours</h2></div><div class="card-b">'+
+      '<div class="sub">Dated exceptions to the week above. Kept separate because &ldquo;closed Christmas Day&rdquo; is a fact about one date &mdash; folded into the weekly '+
+      'pattern it would say the business shuts every Thursday forever.</div>'+
+      '<textarea data-p="specialHours" placeholder="One per line: 2026-12-25 | closed &nbsp;or&nbsp; 2026-12-24 | 08:00 | 12:00">'+
+        esc((p.specialHours||[]).map(h=>h.isClosed?h.date+" | closed":[h.date,h.opens,h.closes].join(" | ")).join("\n"))+'</textarea>'+
+    '</div></div>'+
+
+    '<div class="card"><div class="card-h"><h2>Registration identifiers</h2><span class="meta">rarely needed</span></div><div class="card-b"><div class="cols2">'+
+      f("taxID","Tax ID / EIN",p.taxID)+f("vatID","VAT ID",p.vatID)+
+      f("duns","D-U-N-S",p.duns)+f("leiCode","LEI",p.leiCode)+
+      f("isicV4","ISIC v4",p.isicV4)+
+    '</div><div class="sub" style="margin:.2rem 0 0">Published if set. Most home-services businesses leave these blank.</div></div></div>'+
+
     '<button class="btn primary" id="saveProfile">Save profile</button>';
+}
+
+/**
+ * The seven-day hours editor.
+ *
+ * Previously this card printed a count and nothing else, so hours imported from
+ * Google landed in the file and stayed invisible — and hours are the one field
+ * a person most often needs to correct, because Google's are frequently stale.
+ */
+function hoursCard(hours){
+  const DAYS=["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+  const byDay={};
+  hours.forEach(h=>{ if(h && typeof h.day==="number") byDay[h.day]=h; });
+
+  const rows=DAYS.map((label,day)=>{
+    const h=byDay[day]||{};
+    // A day that is neither marked closed nor given times is unknown, not open.
+    const closed=h.isClosed===true;
+    return '<tr><td class="primary">'+label+'</td>'+
+      '<td><label class="meta" style="display:flex;gap:.35rem;align-items:center">'+
+        '<input type="checkbox" data-hclosed="'+day+'"'+(closed?' checked':'')+' style="width:auto"> closed</label></td>'+
+      '<td><input type="time" data-hopens="'+day+'" value="'+esc(h.opens||"")+'"'+(closed?' disabled':'')+'></td>'+
+      '<td><input type="time" data-hcloses="'+day+'" value="'+esc(h.closes||"")+'"'+(closed?' disabled':'')+'></td></tr>';
+  }).join("");
+
+  const open=hours.filter(h=>h && !h.isClosed && h.opens && h.closes).length;
+
+  return '<div class="card"><div class="card-h"><h2>Hours</h2><span class="meta">'+open+' open day'+(open===1?"":"s")+' of 7</span></div>'+
+    '<div class="card-b" style="padding-bottom:0"><div class="sub">Google Places fills these when you pull. Verify them &mdash; a listing&rsquo;s hours are often years out of date, '+
+    'and an answer engine will repeat them verbatim.</div></div>'+
+    '<table><tr><th>Day</th><th></th><th>Opens</th><th>Closes</th></tr>'+rows+'</table>'+
+    '<div class="card-b"><button class="btn" id="hours247">Set 24/7</button> '+
+    '<button class="btn" id="hoursWeekdays">Mon&ndash;Fri 8&ndash;5</button></div></div>';
 }
 
 function overviewView(){
@@ -342,22 +482,31 @@ async function discoverabilityView(){
 
 function sourcesView(){
   const p = detail.pendingIntake || {total:0};
+  const S = (detail.settings && detail.settings.sources) || {};
   const parts = Object.entries(p).filter(([k,v])=>k!=="total"&&v>0)
     .map(([k,v])=>v+" "+(LABELS[k]||k).toLowerCase());
 
-  return '<h1>Sources</h1><div class="sub">Google first, then the website, then you. Everything extracted arrives unapproved.</div>'+
+  return '<h1>Sources</h1><div class="sub">The website first, then Google, then you. Everything extracted arrives unapproved.</div>'+
   (p.total>0
     ? '<div class="banner warn"><strong>'+p.total+' candidate'+(p.total===1?"":"s")+' waiting to be promoted'+
       (parts.length?' — '+esc(parts.join(", ")):"")+'.</strong> A crawl only writes candidates; '+
       'until you promote them the sections stay empty. '+
       '<button class="btn primary" data-run="promote" style="margin-left:.4rem">Promote now</button></div>'
     : "")+
-  '<div class="card"><div class="card-h"><h2>1 &nbsp;Google Places</h2><span class="meta">no customer authorization needed</span></div>'+
-    '<div class="card-b"><div class="sub" style="margin:0 0 .7rem">Hours, address and phone from public Google data using your own API key. Google permits storing place_id only, so treat the rest as a suggestion the owner confirms.</div>'+
-    '<button class="btn primary" data-run="places">Pull from Google</button></div></div>'+
-  '<div class="card"><div class="card-h"><h2>2 &nbsp;Website</h2></div><div class="card-b">'+
+  '<div class="card"><div class="card-h"><h2>1 &nbsp;Website</h2><span class="meta">run this first</span></div><div class="card-b">'+
     '<div class="sub" style="margin:0 0 .7rem">Crawls the domain, respecting robots.txt. Prefers structured data the site already publishes.</div>'+
+    '<div class="sub" style="margin:0 0 .7rem">It also looks for the client&rsquo;s Google place ID in their own markup &mdash; embedded maps and review widgets '+
+    'usually carry it. That is why this runs before Google Places: for a service-area business the ID is the only way in, and the site is the most '+
+    'reliable place to get it.</div>'+
+    (S.googlePlaceId
+      ? '<div class="sub" style="margin:0 0 .7rem">Place ID already saved in Settings, so Google Places will use that.</div>'
+      : "")+
     '<button class="btn primary" data-run="website">Crawl website</button></div></div>'+
+  '<div class="card"><div class="card-h"><h2>2 &nbsp;Google Places</h2><span class="meta">needs a place ID</span></div>'+
+    '<div class="card-b"><div class="sub" style="margin:0 0 .7rem">Hours, phone and address from public Google data using your own API key. Google permits storing place_id only, so treat the rest as a suggestion the owner confirms.</div>'+
+    '<div class="sub" style="margin:0 0 .7rem">Uses the place ID from Settings, or one the crawl found. There is no search &mdash; Google returns no '+
+    'service-area business from any lookup endpoint, and that is most home-services clients. Without an ID, enter the business by hand.</div>'+
+    '<button class="btn primary" data-run="places">Pull from Google</button></div></div>'+
   '<div class="card"><div class="card-h"><h2>3 &nbsp;Promote into content</h2>'+
     (p.total>0?'<span class="pill wait">'+p.total+' waiting</span>':"")+'</div><div class="card-b">'+
     '<div class="sub" style="margin:0 0 .7rem"><strong>Required.</strong> Crawling only writes candidates to an intake file — '+
@@ -372,7 +521,13 @@ function publishingView(){
   '<div class="card"><div class="card-h"><h2>schema.org JSON-LD</h2>'+
     '<div class="row"><button class="btn" id="loadJsonld">Generate</button><button class="btn" id="copyJsonld">Copy</button></div></div>'+
     '<div class="card-b"><div class="sub" style="margin:0 0 .7rem">Works today with Google and every AI crawler. Goes in the page head, or is fetched live from <code>/jsonld</code>.</div>'+
-    '<pre id="jsonldOut">Not generated yet.</pre></div></div>'+
+    '<div id="jsonldIssues"></div>'+
+    '<pre id="jsonldOut">Not generated yet.</pre>'+
+    '<div class="sub" style="margin:.7rem 0 0">Checked against the schema.org vocabulary on every generate &mdash; a property on the wrong type is dropped silently by crawlers, '+
+    'so nothing else would tell you. Neither official validator has an API, so spot-check occasionally: '+
+    '<a href="https://validator.schema.org/" target="_blank" rel="noopener">Schema Markup Validator &#8599;</a> &middot; '+
+    '<a href="https://search.google.com/test/rich-results" target="_blank" rel="noopener">Rich Results Test &#8599;</a> &mdash; press Copy first.</div>'+
+    '</div></div>'+
   '<div class="card"><div class="card-h"><h2>Database</h2></div><div class="card-b">'+
     '<div class="sub" style="margin:0 0 .7rem">Pushes approved content to Supabase. Publishing the profile is a separate, deliberate act.</div>'+
     '<div class="row"><button class="btn" data-db="dry">Dry run</button>'+
@@ -388,13 +543,9 @@ function settingsView(){
     '</span><input data-l="'+k+'" value="'+esc(L[k]||"")+'" placeholder="'+esc(ph)+'"></label>';
 
   return '<h1>Settings</h1><div class="sub">Per-client configuration.</div>'+
-  '<div class="card"><div class="card-h"><h2>Business</h2></div><div class="card-b">'+
-    '<label class="f"><span>Business name</span><input data-s="name" value="'+esc(s.name)+'"></label>'+
-    '<label class="f"><span>Domain</span><input data-s="domain" value="'+esc(s.domain)+'"></label>'+
-    '<label class="f"><span>schema.org type</span><select data-s="schemaType">'+
-      ["LocalBusiness","Plumber","HVACBusiness","Electrician","RoofingContractor","GeneralContractor","HomeAndConstructionBusiness"]
-        .map(t=>'<option '+(t===s.schemaType?"selected":"")+'>'+t+'</option>').join("")+'</select></label>'+
-    '<label class="f"><span>Public API URL (once deployed)</span><input data-s="apiBaseUrl" value="'+esc(s.apiBaseUrl)+'" placeholder="https://api.'+esc(s.domain)+'"></label>'+
+  '<div class="card"><div class="card-h"><h2>Deployment</h2></div><div class="card-b">'+
+    '<label class="f"><span>Public API URL (once deployed)</span>'+
+      '<input data-s="apiBaseUrl" value="'+esc(s.apiBaseUrl)+'" placeholder="https://api.'+esc(s.domain)+'"></label>'+
   '</div></div>'+
 
   '<div class="card"><div class="card-h"><h2>Content sources</h2></div><div class="card-b">'+
@@ -407,6 +558,14 @@ function settingsView(){
     '<label class="f"><span>Service areas page URL'+
       (S.serviceAreasPageUrl?' &nbsp;<a href="'+esc(S.serviceAreasPageUrl)+'" target="_blank" rel="noopener">open ↗</a>':"")+
       '</span><input data-src="serviceAreasPageUrl" value="'+esc(S.serviceAreasPageUrl||"")+'" placeholder="https://'+esc(s.domain)+'/coverage"></label>'+
+    '<label class="f"><span>Google place ID'+
+      (S.googlePlaceId?' &nbsp;<a href="https://www.google.com/maps/place/?q=place_id:'+encodeURIComponent(S.googlePlaceId)+'" target="_blank" rel="noopener">open ↗</a>':"")+
+      '</span><input data-src="googlePlaceId" value="'+esc(S.googlePlaceId||"")+'" placeholder="ChIJ… or paste any Google link containing one"></label>'+
+    '<div class="sub" style="margin:.2rem 0 0">The only way Places intake can reach a listing. Google returns no service-area business from any lookup '+
+    'endpoint, so a live, verified, well-reviewed listing can still be unfindable by name or phone &mdash; and that describes most home-services clients.</div>'+
+    '<div class="sub" style="margin:.35rem 0 0">The website crawl fills this in automatically when the site embeds a map, a directions link or a review widget, '+
+    'since those all carry the ID. Otherwise ask the client for their <strong>Google review link</strong> and paste the whole thing here. '+
+    'A <code>cid=</code> link will not do &mdash; different identifier, not convertible.</div>'+
   '</div></div>'+
 
   '<div class="card"><div class="card-h"><h2>Accounts &amp; access</h2></div><div class="card-b">'+
@@ -520,14 +679,79 @@ document.addEventListener("click", async e => {
       toast("Added, approved, not yet published."); await refresh(); return;
     }
 
+    if(t.dataset.hclosed!==undefined){
+      const day=t.dataset.hclosed;
+      document.querySelector('[data-hopens="'+day+'"]').disabled = t.checked;
+      document.querySelector('[data-hcloses="'+day+'"]').disabled = t.checked;
+      return;
+    }
+
+    if(t.id==="hours247"||t.id==="hoursWeekdays"){
+      const all = t.id==="hours247";
+      [0,1,2,3,4,5,6].forEach(day=>{
+        const closed = all ? false : (day===0||day===6);
+        document.querySelector('[data-hclosed="'+day+'"]').checked = closed;
+        document.querySelector('[data-hopens="'+day+'"]').value = closed?"":(all?"00:00":"08:00");
+        document.querySelector('[data-hcloses="'+day+'"]').value = closed?"":(all?"23:59":"17:00");
+        document.querySelector('[data-hopens="'+day+'"]').disabled = closed;
+        document.querySelector('[data-hcloses="'+day+'"]').disabled = closed;
+      });
+      toast("Filled in — press Save profile to keep it.");
+      return;
+    }
+
     if(t.id==="saveProfile"){
       const raw = JSON.parse(JSON.stringify(detail.profile)); raw.address = raw.address||{};
+      const LISTS=["sameAs","imageUrls","paymentAccepted","languages","memberOf","awards"];
+      const lines=v=>(v||"").split("\n").map(s=>s.trim()).filter(Boolean);
+      let geoLat=null, geoLng=null;
+
       document.querySelectorAll("[data-p]").forEach(el=>{
         const k=el.dataset.p, v=el.value.trim()===""?null:el.value.trim();
         if(k.startsWith("address.")) raw.address[k.slice(8)] = v;
-        else if(k==="foundedYear") raw[k] = v?Number(v):null;
+        else if(k==="geo.latitude") geoLat = v;
+        else if(k==="geo.longitude") geoLng = v;
+        else if(k==="foundedYear"||k==="numberOfEmployees") raw[k] = v?Number(v):null;
+        else if(LISTS.indexOf(k)!==-1) raw[k] = lines(v);
+        else if(k==="businessType") raw[k] = v||"storefront";
+        else if(k==="attributes"){
+          // "Veteran-owned = Yes" or bare "Free estimates".
+          raw[k] = lines(v).map(line=>{
+            const i=line.indexOf("=");
+            return i===-1 ? {name:line, value:"Yes"}
+                          : {name:line.slice(0,i).trim(), value:line.slice(i+1).trim()||"Yes"};
+          });
+        }
+        else if(k==="contactPoints"){
+          raw[k] = lines(v).map(line=>{
+            const parts=line.split("|").map(s=>s.trim());
+            return {contactType:parts[0]||"customer service", phone:parts[1]||null, email:parts[2]||null};
+          }).filter(c=>c.phone||c.email);
+        }
+        else if(k==="specialHours"){
+          raw[k] = lines(v).map(line=>{
+            const parts=line.split("|").map(s=>s.trim());
+            const closed = (parts[1]||"").toLowerCase()==="closed";
+            return {date:parts[0], isClosed:closed,
+                    opens:closed?null:(parts[1]||null), closes:closed?null:(parts[2]||null)};
+          }).filter(h=>/^\d{4}-\d{2}-\d{2}$/.test(h.date||""));
+        }
         else raw[k] = v;
       });
+
+      // Half a coordinate places the business in the ocean, so both or neither.
+      raw.geo = (geoLat && geoLng) ? {latitude:Number(geoLat), longitude:Number(geoLng)} : null;
+
+      // Hours are collected from the seven-day grid rather than data-p, since a
+      // day is three controls that only mean anything together.
+      if(document.querySelector("[data-hclosed]")){
+        raw.hours = [0,1,2,3,4,5,6].map(day=>{
+          const closed = document.querySelector('[data-hclosed="'+day+'"]').checked;
+          const opens = document.querySelector('[data-hopens="'+day+'"]').value.trim();
+          const closes = document.querySelector('[data-hcloses="'+day+'"]').value.trim();
+          return {day, isClosed:closed, opens:closed?null:(opens||null), closes:closed?null:(closes||null)};
+        });
+      }
       await api("/clients/"+current+"/profile",{method:"PUT",body:JSON.stringify(raw)});
       toast("Profile saved."); await refresh(); return;
     }
@@ -556,6 +780,18 @@ document.addEventListener("click", async e => {
       return;
     }
 
+    if(t.dataset.gen){
+      const dry = t.dataset.gen.endsWith("-dry");
+      const out=$("genOut"); out.textContent="Running…"; t.disabled=true;
+      const r = await api("/clients/"+current+"/generate/brand-faqs",
+        {method:"POST",body:JSON.stringify({dryRun:dry})});
+      t.disabled=false;
+      await refresh(); render();
+      if($("genOut")) $("genOut").textContent = r.output;
+      toast(dry ? "Preview only — nothing written." : "Generated. Review them in Q&A before approving.");
+      return;
+    }
+
     if(t.dataset.run){
       const out=$("runOut"); out.textContent="Running… this can take a minute.";
       t.disabled=true;
@@ -580,7 +816,24 @@ document.addEventListener("click", async e => {
     if(t.id==="loadJsonld"){
       const r = await api("/clients/"+current+"/jsonld");
       $("jsonldOut").textContent = JSON.stringify(r.graph,null,2);
-      if(r.warnings.length) toast(r.warnings[0]);
+
+      const issues = r.issues||[];
+      const errors = issues.filter(i=>i.severity==="error");
+      const warns  = issues.filter(i=>i.severity!=="error");
+      const row=i=>'<div style="margin:.15rem 0"><code>'+esc(i.path)+'</code> &mdash; '+esc(i.message)+'</div>';
+
+      $("jsonldIssues").innerHTML =
+        (errors.length
+          ? '<div class="banner bad"><strong>'+errors.length+' invalid schema.org propert'+(errors.length===1?"y":"ies")+
+            '.</strong> Crawlers drop '+(errors.length===1?"it":"them")+' silently.'+errors.map(row).join("")+'</div>'
+          : '')+
+        (warns.length
+          ? '<div class="banner warn"><strong>'+warns.length+' thing'+(warns.length===1?"":"s")+' worth a look.</strong>'+warns.map(row).join("")+'</div>'
+          : '')+
+        (!issues.length ? '<div class="banner ok"><strong>Valid schema.org.</strong> Every property checked against the vocabulary.</div>' : '');
+
+      if(errors.length) toast(errors.length+" invalid propert"+(errors.length===1?"y":"ies")+" — see above.");
+      else if(r.warnings.length) toast(r.warnings[0]);
       return;
     }
     if(t.id==="copyJsonld"){
