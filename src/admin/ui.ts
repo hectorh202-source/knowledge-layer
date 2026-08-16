@@ -154,6 +154,8 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
     <div class="navlabel">System</div>
     <button class="nav" data-sys="status">Status</button>
     <button class="nav" data-sys="clients">All clients</button>
+    <button class="nav" data-sys="team">Team</button>
+    <button class="nav" data-sys="platform" id="platformNav" hidden>Platform</button>
     <form method="post" action="/logout" id="signOut" hidden><button class="nav" type="submit">Sign out</button></form>
   </aside>
   <main id="main"><div class="empty">Loading…</div></main>
@@ -203,7 +205,7 @@ const KINDS = {
 const SECTIONS = ["overview","discoverability","profile",...Object.keys(KINDS),"sources","publishing","settings"];
 const LABELS = {overview:"Overview",discoverability:"Discoverability",profile:"Business profile",sources:"Sources",publishing:"Publishing",settings:"Settings",...Object.fromEntries(Object.entries(KINDS).map(([k,v])=>[k,v.label]))};
 
-let clients = [], current = null, view = "clients", detail = null, agency = null;
+let clients = [], current = null, view = "clients", detail = null, agency = null, isPlatformAdmin = false;
 
 /**
  * Where you are, kept in the URL.
@@ -216,7 +218,7 @@ let clients = [], current = null, view = "clients", detail = null, agency = null
  * replaceState rather than pushState: it survives a refresh without turning
  * every section click into a history entry to press Back through.
  */
-const SYSTEM_VIEWS = ["status","clients"];
+const SYSTEM_VIEWS = ["status","clients","team","platform"];
 
 function syncLocation(){
   const next = SYSTEM_VIEWS.indexOf(view)!==-1 ? "#/"+view
@@ -756,6 +758,69 @@ function settingsView(){
   '<button class="btn danger" id="deleteClient">Delete client</button></div>';
 }
 
+async function teamView(){
+  if(!agency) return '<h1>Team</h1><div class="sub">Agencies are off &mdash; Supabase is not configured, '+
+    'so every client is visible to anyone who can reach this portal.</div>';
+
+  const r = await api("/agency/members");
+  const owner = r.role === "owner";
+
+  const rows = r.members.map(m=>
+    '<tr><td><div class="primary">'+esc(m.email)+'</div>'+
+      (m.joined?'':'<div class="secondary">invited, has not signed in yet</div>')+'</td>'+
+    '<td class="meta">'+esc(m.role)+'</td>'+
+    '<td class="meta">'+(m.joined?'<span class="pill ok">active</span>':'<span class="pill wait">pending</span>')+'</td>'+
+    '<td class="meta">'+(owner
+      ? '<button class="btn danger" data-rm="'+esc(m.joined?m.userId:m.email)+'">Remove</button>'
+      : '')+'</td></tr>').join("");
+
+  return '<h1>Team</h1><div class="sub">Who can see '+esc(agency.name)+'&rsquo;s clients.</div>'+
+    '<div class="card"><div class="card-h"><h2>Members</h2><span class="meta">'+r.members.length+'</span></div>'+
+      '<table><tr><th>Person</th><th>Role</th><th>Status</th><th></th></tr>'+rows+'</table></div>'+
+    (owner
+      ? '<div class="card"><div class="card-h"><h2>Invite someone</h2></div><div class="card-b">'+
+        '<div class="sub">They join this agency the first time they sign in, and can then see every client in it.</div>'+
+        '<div class="sub">Public signups are off, which is correct &mdash; so an invite is a claim on an email address rather than '+
+        'a link that lets someone enrol themselves. If Supabase cannot send the email, create the account in '+
+        '<strong>Authentication &rarr; Users</strong> and they will still land here on first sign-in.</div>'+
+        '<div class="row" style="gap:.5rem;margin:.7rem 0 0">'+
+          '<input id="inviteEmail" type="email" placeholder="name@example.com" style="flex:1">'+
+          '<button class="btn" id="sendInvite">Send invite</button></div>'+
+        '<div id="inviteOut"></div>'+
+        '</div></div>'
+      : '<div class="card"><div class="card-b"><div class="sub" style="margin:0">Only an owner can invite or remove people.</div></div></div>');
+}
+
+async function platformView(){
+  const r = await api("/platform/agencies");
+
+  const rows = r.agencies.map(a=>
+    '<tr><td><div class="primary">'+esc(a.name)+'</div>'+
+      '<div class="secondary">since '+esc(new Date(a.createdAt).toLocaleDateString())+'</div></td>'+
+    '<td class="meta">'+a.clients+'</td>'+
+    '<td class="meta">'+a.members+(a.pending?' <span class="pill wait">'+a.pending+' pending</span>':'')+'</td>'+
+    '</tr>').join("");
+
+  return '<h1>Platform</h1><div class="sub">Every agency on this installation. '+
+    'You administer agencies here, not their clients &mdash; their data stays theirs.</div>'+
+    '<div class="card"><div class="card-h"><h2>Agencies</h2><span class="meta">'+r.agencies.length+'</span></div>'+
+      '<table><tr><th>Agency</th><th>Clients</th><th>People</th></tr>'+rows+'</table></div>'+
+    '<div class="card"><div class="card-h"><h2>Create an agency</h2></div><div class="card-b">'+
+      '<div class="sub">Creates the agency and invites its first owner. They become owner the first time they sign in, '+
+      'and can then invite their own team and add their own clients.</div>'+
+      '<div class="cols2">'+
+        '<label class="f"><span>Agency name</span><input id="agName" placeholder="Coastal Marketing"></label>'+
+        '<label class="f"><span>Owner email</span><input id="agEmail" type="email" placeholder="owner@example.com"></label>'+
+      '</div>'+
+      '<button class="btn" id="createAgency">Create agency</button>'+
+      '<div id="agOut"></div>'+
+    '</div></div>'+
+    '<div class="card"><div class="card-b"><div class="sub" style="margin:0">'+
+      '<strong>Platform admins are set in <code>.env</code></strong> &mdash; <code>PLATFORM_ADMIN_EMAILS</code>, comma separated &mdash; not here. '+
+      'This is the one role that can create agencies, and it should not be grantable through a web form by whoever currently holds it: '+
+      'a single compromised session would otherwise be permanent.</div></div></div>';
+}
+
 async function statusView(){
   const st = await api("/status");
   const pill = s => s==="running"||s==="connected" ? '<span class="pill ok">'+s+'</span>'
@@ -788,6 +853,8 @@ function clientsView(){
 async function render(){
   const m = $("main");
   if(view==="status"){ m.innerHTML = await statusView(); return; }
+  if(view==="team"){ m.innerHTML = await teamView(); return; }
+  if(view==="platform"){ m.innerHTML = await platformView(); return; }
   if(view==="clients" || !current){ m.innerHTML = clientsView(); return; }
   if(view==="discoverability"){ m.innerHTML = await discoverabilityView(); return; }
   if(view==="overview") m.innerHTML = overviewView();
@@ -1049,6 +1116,39 @@ document.addEventListener("click", async e => {
       return;
     }
 
+    if(t.id==="createAgency"){
+      const name = ($("agName").value||"").trim(), email = ($("agEmail").value||"").trim();
+      if(!name || !email){ toast("Both a name and an owner email are needed."); return; }
+      t.disabled=true;
+      try{
+        const r = await api("/platform/agencies",{method:"POST",body:JSON.stringify({name,ownerEmail:email})});
+        $("agOut").innerHTML = '<div class="banner '+(r.emailed?"ok":"warn")+'" style="margin-top:.7rem">'+
+          '<strong>'+esc(r.agency.name)+'</strong> &mdash; '+esc(r.note)+'</div>';
+        $("agName").value=""; $("agEmail").value="";
+      } finally { t.disabled=false; }
+      return;
+    }
+
+    if(t.id==="sendInvite"){
+      const email = ($("inviteEmail").value||"").trim();
+      if(!email){ toast("Enter an email address."); return; }
+      t.disabled=true;
+      try{
+        const r = await api("/agency/invites",{method:"POST",body:JSON.stringify({email})});
+        // Rendered rather than toasted: when the email cannot be sent the note
+        // explains what to do instead, and that should not vanish after 3s.
+        $("inviteOut").innerHTML = '<div class="banner '+(r.emailed?"ok":"warn")+'" style="margin-top:.7rem">'+
+          '<strong>'+esc(r.email)+'</strong> &mdash; '+esc(r.note)+'</div>';
+      } finally { t.disabled=false; }
+      return;
+    }
+
+    if(t.dataset.rm){
+      if(!confirm("Remove "+t.dataset.rm+" from this agency?")) return;
+      await api("/agency/members/"+encodeURIComponent(t.dataset.rm),{method:"DELETE"});
+      toast("Removed."); await render(); return;
+    }
+
     if(t.id==="runNap"){
       const out=$("napOut"); out.innerHTML='<div class="sub" style="margin:0">Comparing…</div>';
       t.disabled=true;
@@ -1188,11 +1288,17 @@ async function showSession(){
   try{
     const r = await fetch("/whoami");
     if(!r.ok) return;
-    const {user} = await r.json();
+    const {user, platformAdmin} = await r.json();
     if(!user) return;
     const form = $("signOut");
     form.hidden = false;
     form.querySelector("button").textContent = "Sign out — " + (user.email || "signed in");
+
+    // Only platform admins see the section exists. The routes behind it are
+    // guarded separately and return 404 to everyone else, so hiding it is
+    // tidiness rather than the security boundary.
+    isPlatformAdmin = !!platformAdmin;
+    if(isPlatformAdmin) $("platformNav").hidden = false;
   }catch(err){ /* auth not configured; leave it hidden */ }
 }
 

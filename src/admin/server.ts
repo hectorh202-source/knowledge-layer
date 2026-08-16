@@ -12,7 +12,7 @@ import {
   type AuthedRequest,
 } from "./auth";
 import { listTenantSlugs, migrateLegacyContent } from "../tenancy/store";
-import { agenciesEnabled, agencyFor } from "../tenancy/agency";
+import { agenciesEnabled, agencyFor, isPlatformAdmin } from "../tenancy/agency";
 
 /**
  * The admin portal.
@@ -142,7 +142,12 @@ function main(): void {
   app.use("/admin/api", createAdminRouter());
 
   app.get("/whoami", (req: AuthedRequest, res: Response) =>
-    res.json({ user: req.user ?? null })
+    res.json({
+      user: req.user ?? null,
+      // Drives whether the Platform section appears at all. The routes behind
+      // it are guarded independently — this only decides what is worth showing.
+      platformAdmin: isPlatformAdmin(req.user?.email),
+    })
   );
 
   app.get(["/", "/admin"], (_req: Request, res: Response) => {

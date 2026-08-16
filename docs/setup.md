@@ -38,6 +38,7 @@ key.
 | `SUPABASE_URL` | Publishing to a database | Optional. Files work without it. |
 | `SUPABASE_ANON_KEY` | The public API | **Must be the anon key.** See the warning below. |
 | `SUPABASE_SERVICE_ROLE_KEY` | The content loader | Server-side only. Never send to a browser. |
+| `PLATFORM_ADMIN_EMAILS` | Creating agencies | Comma separated. Empty means no platform tier. |
 | `TENANT_SLUG` | CLI default | Convenience only; `--tenant` overrides it. |
 | `CATALOG_DOMAIN` | Catalog generation | Tier 3. |
 | `API_BASE_URL` | OpenAPI `servers` block | Tier 3. A spec advertising localhost is worse than none. |

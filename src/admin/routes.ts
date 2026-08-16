@@ -24,6 +24,14 @@ import {
   claim,
   mayAccess,
   release,
+  createAgency,
+  invite,
+  isPlatformAdmin,
+  listAgencies,
+  listMembers,
+  ownerCount,
+  removeMember,
+  sendInviteEmail,
   slugsFor,
   type Agency,
 } from "../tenancy/agency";
@@ -242,6 +250,112 @@ export function createAdminRouter(): Router {
         next();
       } catch (error) {
         res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+      }
+    })();
+  });
+
+  // --- platform -------------------------------------------------------------
+
+  /**
+   * Platform administration sits outside the agency model, so it is guarded
+   * separately. Being an agency owner grants nothing here.
+   */
+  const platformOnly = (req: AgencyRequest & { user?: { email?: string } }, res: Response): boolean => {
+    if (isPlatformAdmin(req.user?.email)) return true;
+    // 404 rather than 403: a non-admin has no business learning that a platform
+    // tier exists.
+    res.status(404).json({ error: "not_found" });
+    return false;
+  };
+
+  router.get("/platform/agencies", (req: AgencyRequest & { user?: { email?: string } }, res: Response) => {
+    void (async () => {
+      if (!platformOnly(req, res)) return;
+      try {
+        res.json({ agencies: await listAgencies() });
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+      }
+    })();
+  });
+
+  router.post("/platform/agencies", (req: AgencyRequest & { user?: { email?: string } }, res: Response) => {
+    void (async () => {
+      if (!platformOnly(req, res)) return;
+      try {
+        const ownerEmail = String(req.body?.ownerEmail ?? "");
+        // createAgency has already written the owner's invite row — that is
+        // what actually places them. This only tries to email them about it.
+        const agency = await createAgency(String(req.body?.name ?? ""), ownerEmail);
+        const emailed = await sendInviteEmail(ownerEmail);
+
+        res.status(201).json({
+          agency,
+          emailed,
+          note: emailed
+            ? "Invite email sent. They become the owner the first time they sign in."
+            : "Agency created, but no invite email could be sent. Create their account in " +
+              "Authentication → Users and they will become the owner on first sign-in.",
+        });
+      } catch (error) {
+        res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+      }
+    })();
+  });
+
+  // --- team ----------------------------------------------------------------
+
+  router.get("/agency/members", (req: AgencyRequest, res: Response) => {
+    void (async () => {
+      try {
+        if (!req.agency) return res.json({ members: [], role: null });
+        res.json({ members: await listMembers(req.agency.id), role: req.agency.role });
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+      }
+    })();
+  });
+
+  router.post("/agency/invites", (req: AgencyRequest & { user?: { id: string } }, res: Response) => {
+    void (async () => {
+      try {
+        if (!req.agency) throw new Error("No agency.");
+        // Owner only. A member who can invite can hand your client list to
+        // anyone, which is not a decision a member should be able to make.
+        if (req.agency.role !== "owner") {
+          res.status(403).json({ error: "Only an owner can invite people." });
+          return;
+        }
+        const result = await invite(req.agency.id, req.user?.id ?? "", String(req.body?.email ?? ""));
+        res.json(result);
+      } catch (error) {
+        res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+      }
+    })();
+  });
+
+  router.delete("/agency/members/:target", (req: AgencyRequest & { user?: { id: string } }, res: Response) => {
+    void (async () => {
+      try {
+        if (!req.agency) throw new Error("No agency.");
+        if (req.agency.role !== "owner") {
+          res.status(403).json({ error: "Only an owner can remove people." });
+          return;
+        }
+
+        const target = req.params.target;
+
+        // Removing the last owner leaves an agency nobody can administer, with
+        // clients still in it and no route back without database access.
+        if (target === req.user?.id && (await ownerCount(req.agency.id)) <= 1) {
+          res.status(400).json({ error: "You are the only owner. Make someone else an owner first." });
+          return;
+        }
+
+        await removeMember(req.agency.id, target);
+        res.json({ ok: true });
+      } catch (error) {
+        res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
       }
     })();
   });

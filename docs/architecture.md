@@ -94,8 +94,43 @@ existing clients by signing up late.
 **Without Supabase there are no agencies** and every client is visible, which is
 the local single-operator setup this app was until agencies existed.
 
-There is no invite flow yet. A second member is added by inserting a row into
-`agency_members`.
+### Invites
+
+Public signups are off and should stay off, so an invite is **a claim on an
+email address**, not a link that lets someone enrol. `agencyFor` checks for a
+pending invite *before* provisioning — without that ordering an invited
+colleague signs in, gets a new empty agency, and it looks identical to the
+invite having failed.
+
+The account itself is created either by Supabase's invite email or by hand in
+the dashboard. Both end in the same place; the invite row is what decides which
+agency they land in, which is why it is written whether or not the email sends.
+
+Owner-only, because a member who can invite can hand the client list to anyone.
+The last owner cannot remove themselves — that leaves an agency with clients, no
+administrator and no route back without database access.
+
+### Platform administration
+
+Three tiers: **platform admin → agencies → clients.** Clients never log in; they
+receive the report.
+
+A platform admin creates agencies and invites their first owner. Granted by
+`PLATFORM_ADMIN_EMAILS` in the environment, never by a database flag or the UI —
+this is the one role that can create agencies, and it should not be grantable
+through a web form by whoever currently holds it, or a single compromised
+session becomes permanent.
+
+**Platform admins administer agencies, not their data.** They see agency names
+and counts, not clients' content. Support access means joining the agency, which
+appears in that agency's Team list — there is no invisible access.
+
+Platform routes return **404** to non-admins rather than 403, so the tier's
+existence is not advertised. Hiding the nav item is tidiness; the routes are
+guarded independently.
+
+Being a platform admin and owning an agency are independent. The env var grants
+one, an `agency_members` row the other.
 
 ## Source abstraction
 
