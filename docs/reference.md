@@ -129,6 +129,25 @@ Mounted at `/admin/api`. Requires a session.
 | `PATCH` | `/clients/:slug/tier1/manual/:id` |
 | `POST` | `/clients/:slug/publish/database` |
 
+## Billing
+
+A ledger, not a payment processor. No card details are held here.
+
+| | |
+|---|---|
+| Model | Setup fee once per client, plus a monthly. Direct clients only for now |
+| Starting plan | $2,500 setup, $800/month |
+| Storage | Supabase only — cross-tenant, and it is money, so no file fallback |
+| Enforcement | Overdue is flagged, never enforced. A billing problem must not become a client's discoverability outage |
+
+Amounts are integer cents everywhere. Plan prices are edited in the database
+on purpose — a price is the one number that should not be a click away from
+changing for everyone at once. A single client's rate is overridden on their
+own Billing page.
+
+Invoices are immutable once issued. Getting one wrong is corrected by voiding
+it and raising another, which is what the `void` status is for.
+
 ## Source layout
 
 ```
@@ -140,6 +159,7 @@ src/
   catalog/      ARD catalog (Tier 3)
   content/      generate-faqs
   data/         profile and content types, load and save, validation
+  billing/      plans, accounts, subscriptions, invoices
   db/           Supabase client and content loader
   intake/       crawl, fetch, html, jsonld, places, promote
   jsonld/       build, validate, vocabulary.json

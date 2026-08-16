@@ -49,6 +49,7 @@ import {
   type TenantSummary,
 } from "../tenancy/store";
 import { storage } from "../tenancy/storage";
+import { billingRoutes } from "./billing-routes";
 
 /**
  * Admin API.
@@ -357,6 +358,25 @@ export function createAdminRouter(): Router {
       }
     })();
   });
+
+  /**
+   * Billing.
+   *
+   * Mounted under its own prefix with its own agency guard — the guard above is
+   * bound to "/clients/:slug" and does not reach "/billing/clients/:slug".
+   *
+   * The slug list is passed in rather than imported, so billing never decides
+   * for itself which clients a caller can see. One answer to that question,
+   * here, where the agency is already resolved.
+   */
+  router.use(
+    "/billing",
+    billingRoutes(async (req: Request) => {
+      const visible = await slugsFor((req as AgencyRequest).agency?.id ?? null);
+      const all = await listTenantSlugs();
+      return visible === null ? all : all.filter((slug) => visible.includes(slug));
+    })
+  );
 
   // --- clients -------------------------------------------------------------
 

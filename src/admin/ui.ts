@@ -193,6 +193,7 @@ tr.pending .btn{pointer-events:none}
     <div class="navlabel">System</div>
     <button class="nav" data-sys="status">Status</button>
     <button class="nav" data-sys="clients">All clients</button>
+    <button class="nav" data-sys="billing">Billing</button>
     <button class="nav" data-sys="team">Team</button>
     <button class="nav" data-sys="platform" id="platformNav" hidden>Platform</button>
     <form method="post" action="/logout" id="signOut" hidden><button class="nav" type="submit">Sign out</button></form>
@@ -251,8 +252,8 @@ const KINDS = {
   "faqs":{label:"Questions & answers",fields:[["question","Question"],["answer","Answer"]]},
   "credentials":{label:"Licenses & credentials",fields:[["title","Title"],["identifier","Number"],["issuer","Issuer"],["validUntil","Valid until (YYYY-MM-DD)"]]}
 };
-const SECTIONS = ["overview","discoverability","profile",...Object.keys(KINDS),"sources","publishing","settings"];
-const LABELS = {overview:"Overview",discoverability:"Discoverability",profile:"Business profile",sources:"Sources",publishing:"Publishing",settings:"Settings",...Object.fromEntries(Object.entries(KINDS).map(([k,v])=>[k,v.label]))};
+const SECTIONS = ["overview","discoverability","profile",...Object.keys(KINDS),"sources","publishing","settings","client-billing"];
+const LABELS = {overview:"Overview",discoverability:"Discoverability",profile:"Business profile",sources:"Sources",publishing:"Publishing",settings:"Settings","client-billing":"Billing",...Object.fromEntries(Object.entries(KINDS).map(([k,v])=>[k,v.label]))};
 
 let clients = [], current = null, view = "clients", detail = null, agency = null, isPlatformAdmin = false;
 
@@ -267,7 +268,7 @@ let clients = [], current = null, view = "clients", detail = null, agency = null
  * replaceState rather than pushState: it survives a refresh without turning
  * every section click into a history entry to press Back through.
  */
-const SYSTEM_VIEWS = ["status","clients","team","platform"];
+const SYSTEM_VIEWS = ["status","clients","billing","team","platform"];
 
 function syncLocation(){
   const next = SYSTEM_VIEWS.indexOf(view)!==-1 ? "#/"+view
@@ -954,6 +955,211 @@ function settingsView(){
   '<button class="btn danger" id="deleteClient">Delete client</button></div>';
 }
 
+/** Cents to "$800". Whole dollars unless there are cents to show. */
+function usd(cents){
+  const n = (cents||0)/100;
+  return "$" + n.toLocaleString("en-US", {minimumFractionDigits: n%1?2:0, maximumFractionDigits:2});
+}
+
+/**
+ * Billing.
+ *
+ * One page, because at this size the question is always the same: who is on
+ * what, and who owes me money. A separate invoices page would mean navigating
+ * to find out whether anyone is overdue, which is the one thing worth seeing
+ * without asking.
+ */
+async function billingView(){
+  let r;
+  try { r = await api("/billing"); }
+  catch(err){
+    return '<h1>Billing</h1><div class="banner bad"><strong>Not available.</strong> '+esc(err.message)+'</div>';
+  }
+
+  const plans = r.plans || [];
+  const rows = (r.rows||[]).slice().sort((a,b)=>b.overdueCents-a.overdueCents);
+
+  const statusPill = row => {
+    if(row.status==="none") return '<span class="pill wait">no plan</span>';
+    if(row.status==="active") return '<span class="pill ok">active</span>';
+    if(row.status==="paused") return '<span class="pill wait">paused</span>';
+    if(row.status==="trialing") return '<span class="pill wait">trial</span>';
+    return '<span class="pill bad">cancelled</span>';
+  };
+
+  const body = rows.map(row=>
+    '<tr><td><div class="primary">'+esc(row.companyName||row.tenantSlug)+'</div>'+
+      (row.contactEmail?'<div class="secondary">'+esc(row.contactEmail)+'</div>':'<div class="secondary">no billing contact</div>')+'</td>'+
+    '<td class="meta">'+statusPill(row)+'</td>'+
+    '<td class="meta">'+(row.status==="none" ? "—"
+      : usd(row.monthlyCents)+(row.interval==="annual"?" /mo, billed yearly":" /mo")+
+        (row.isCustomRate?' <span class="pill wait">custom</span>':''))+'</td>'+
+    '<td class="meta">'+(row.nextInvoiceOn||"—")+
+      (row.setupOwed?'<div class="secondary">setup not yet billed</div>':'')+'</td>'+
+    '<td class="meta">'+(row.overdueCents>0
+      ? '<span class="pill bad">'+usd(row.overdueCents)+' overdue</span>'
+      : row.openCents>0 ? usd(row.openCents)+' open' : '—')+'</td>'+
+    '<td class="meta"><button class="btn" data-bill="'+esc(row.tenantSlug)+'">Open</button></td></tr>'
+  ).join("");
+
+  const stat=(v,l,cls)=>'<div class="stat'+(cls?" "+cls:"")+'"><div class="n">'+v+'</div><div class="l">'+l+'</div></div>';
+
+  return '<h1>Billing</h1><div class="sub">What each client is on, and what is outstanding. '+
+    'A ledger &mdash; money moves however you already collect it, and no card details are held here.</div>'+
+
+    (r.overdueCents>0
+      ? '<div class="banner bad"><strong>'+usd(r.overdueCents)+' overdue.</strong> '+
+        'Nothing is cut off &mdash; an overdue invoice never stops a client being served, because a billing '+
+        'problem should not become their discoverability outage.</div>'
+      : '')+
+
+    ((r.due||[]).length
+      ? '<div class="banner split warn"><span><strong>'+r.due.length+' client'+(r.due.length===1?" is":"s are")+' due to be invoiced.</strong> '+
+        'Raises one invoice each for the coming period, including any unbilled setup fee. Safe to press twice &mdash; '+
+        'a period already invoiced is skipped.</span>'+
+        '<button class="btn primary" id="billRun">Invoice '+r.due.length+'</button></div>'
+      : '')+
+
+    '<div class="grid">'+
+      stat(usd(r.mrrCents),"Monthly recurring")+
+      stat(usd(r.mrrCents*12),"Annual run rate")+
+      stat(usd(r.openCents),"Open invoices")+
+      stat(usd(r.overdueCents),"Overdue")+
+    '</div>'+
+
+    '<div class="card"><div class="card-h"><h2>Clients</h2><span class="meta">'+r.activeCount+' active</span></div>'+
+      (rows.length
+        ? '<table><tr><th>Client</th><th>Status</th><th>Rate</th><th>Next invoice</th><th>Outstanding</th><th></th></tr>'+body+'</table>'
+        : '<div class="empty">No client has a billing account yet. Open one from its Billing tab.</div>')+
+    '</div>'+
+
+    ((r.unbilledSlugs||[]).length
+      ? '<div class="card"><div class="card-h"><h2>Not set up for billing</h2>'+
+        '<span class="meta">'+r.unbilledSlugs.length+'</span></div><div class="card-b">'+
+        '<div class="sub">These clients exist in the portal but have no billing account, so they are invisible to '+
+        'every number above &mdash; including the run rate.</div>'+
+        '<div class="row">'+r.unbilledSlugs.map(sl=>
+          '<button class="btn quiet" data-bill="'+esc(sl)+'">'+esc(sl)+'</button>').join("")+
+        '</div></div></div>'
+      : '')+
+
+    (r.unbilledSetupCents>0
+      ? '<div class="card"><div class="card-b"><div class="sub" style="margin:0">'+
+        '<strong>'+usd(r.unbilledSetupCents)+' of setup fees not yet invoiced.</strong> '+
+        'Setup is charged once per client and is added automatically to their first invoice.</div></div></div>'
+      : '')+
+
+    '<div class="card"><div class="card-h"><h2>Plans</h2></div><div class="card-b">'+
+      (plans.length
+        ? '<table><tr><th>Plan</th><th>Setup</th><th>Monthly</th></tr>'+
+          plans.map(pl=>'<tr><td>'+esc(pl.name)+'</td><td class="meta">'+usd(pl.setupCents)+
+            '</td><td class="meta">'+usd(pl.monthlyCents)+'</td></tr>').join("")+'</table>'
+        : '<div class="sub" style="margin:0">No plans. Apply the billing migration.</div>')+
+      '<div class="sub" style="margin:.7rem 0 0">Plans are edited in the database, deliberately. '+
+      'A price is the one number that should not be a click away from being changed for everyone at once &mdash; '+
+      'a single client\'s rate is overridden on their own page instead.</div>'+
+    '</div></div>';
+}
+
+/**
+ * One client's billing: who is invoiced, what they pay, what has been sent.
+ *
+ * Separate from the client's Settings because settings are operational — how we
+ * work on them — and this is commercial. Mixing the two puts a price field next
+ * to a crawl URL, where an accidental edit to either is equally easy.
+ */
+async function clientBillingView(){
+  const slug = current;
+  let r;
+  try { r = await api("/billing/clients/"+slug); }
+  catch(err){
+    return '<h1>Billing</h1><div class="banner bad"><strong>Not available.</strong> '+esc(err.message)+'</div>';
+  }
+
+  const acc = r.account, sub = r.subscription, plans = r.plans||[];
+  const name = detail && detail.settings ? detail.settings.name : slug;
+
+  const invoiceRows = (r.invoices||[]).map(inv=>{
+    const overdue = inv.status==="issued" && inv.dueOn && inv.dueOn < new Date().toISOString().slice(0,10);
+    const pill = inv.status==="paid" ? '<span class="pill ok">paid</span>'
+      : inv.status==="void" ? '<span class="pill">void</span>'
+      : overdue ? '<span class="pill bad">overdue</span>' : '<span class="pill wait">issued</span>';
+
+    return '<tr><td><div class="primary">'+esc(inv.number)+'</div>'+
+      '<div class="secondary">'+(inv.periodStart?esc(inv.periodStart)+' to '+esc(inv.periodEnd):"—")+'</div></td>'+
+      '<td class="meta">'+usd(inv.totalCents)+'</td>'+
+      '<td class="meta">'+pill+(inv.dueOn&&inv.status==="issued"?'<div class="secondary">due '+esc(inv.dueOn)+'</div>':"")+
+        (inv.paidOn?'<div class="secondary">'+esc(inv.paidOn)+(inv.paidMethod?' · '+esc(inv.paidMethod):"")+'</div>':"")+'</td>'+
+      '<td class="meta">'+(inv.status==="issued"
+        ? '<div class="toggle"><button class="btn" data-paid="'+esc(inv.id)+'">Mark paid</button>'+
+          '<button class="btn danger" data-void="'+esc(inv.id)+'">Void</button></div>'
+        : "")+'</td></tr>';
+  }).join("");
+
+  const planOptions = plans.map(pl=>
+    '<option value="'+esc(pl.id)+'"'+(sub&&sub.planId===pl.id?' selected':'')+'>'+
+    esc(pl.name)+' — '+usd(pl.setupCents)+' setup, '+usd(pl.monthlyCents)+'/mo</option>').join("");
+
+  return '<h1>Billing</h1><div class="sub">What '+esc(name)+' pays, and what has been sent.</div>'+
+
+    (!acc
+      ? '<div class="banner warn"><strong>No billing account yet.</strong> Fill in the contact below and save &mdash; '+
+        'until then this client is invisible to every number on the Billing page, including the run rate.</div>'
+      : "")+
+
+    (sub && sub.status==="active"
+      ? '<div class="banner ok"><strong>'+usd(sub.monthlyCents)+
+        (sub.interval==="annual"?' a month, billed yearly.':' a month.')+'</strong> '+
+        'On '+esc(sub.planName)+' since '+esc(sub.startedOn)+'. Next invoice '+esc(sub.nextInvoiceOn)+'.'+
+        (sub.setupInvoiced?'':' Setup of '+usd(sub.setupCents)+' has not been billed yet and will be added to the next one.')+
+        '</div>'
+      : "")+
+
+    '<div class="card"><div class="card-h"><h2>Who gets the invoice</h2></div><div class="card-b">'+
+      '<div class="sub" style="margin:0 0 .7rem">Deliberately not the profile email. That address publishes &mdash; it is '+
+      'where their customers write. An invoice goes to whoever does their books.</div>'+
+      '<div class="cols2">'+
+        '<label class="f"><span>Company name</span><input data-b="companyName" value="'+esc(acc?acc.companyName:"")+'" placeholder="'+esc(name)+'"></label>'+
+        '<label class="f"><span>Billing email</span><input data-b="contactEmail" type="email" value="'+esc(acc?acc.contactEmail:"")+'" placeholder="accounts@example.com"></label>'+
+        '<label class="f"><span>Contact name</span><input data-b="contactName" value="'+esc(acc?acc.contactName:"")+'" placeholder="Who to address it to"></label>'+
+      '</div>'+
+      '<label class="f"><span>Notes</span><textarea data-b="notes" style="min-height:3.5rem">'+esc(acc?acc.notes:"")+'</textarea></label>'+
+      '<button class="btn primary" id="saveBillingAccount">Save</button>'+
+    '</div></div>'+
+
+    '<div class="card"><div class="card-h"><h2>'+(sub?"Change the plan":"Put them on a plan")+'</h2>'+
+      (sub&&sub.status==="active"?'<button class="btn quiet" data-substatus="paused">Pause</button>':"")+
+      (sub&&sub.status==="paused"?'<button class="btn quiet" data-substatus="active">Resume</button>':"")+
+      '</div><div class="card-b">'+
+      (acc
+        ? '<div class="cols2">'+
+            '<label class="f"><span>Plan</span><select id="bPlan">'+planOptions+'</select></label>'+
+            '<label class="f"><span>Billing interval</span><select id="bInterval">'+
+              '<option value="monthly"'+(sub&&sub.interval==="monthly"?" selected":"")+'>Monthly</option>'+
+              '<option value="annual"'+(sub&&sub.interval==="annual"?" selected":"")+'>Annual</option>'+
+            '</select></label>'+
+            '<label class="f"><span>Monthly rate override</span><input id="bMonthly" placeholder="blank = the plan\'s price" value="'+
+              (sub&&sub.isCustomRate?(sub.monthlyCents/100):"")+'"></label>'+
+            '<label class="f"><span>Setup fee</span><input id="bSetup" placeholder="blank = the plan\'s setup" value="'+
+              (sub?(sub.setupCents/100):"")+'"'+(sub&&sub.setupInvoiced?' disabled':'')+'></label>'+
+          '</div>'+
+          '<div class="sub" style="margin:0 0 .7rem">Discount the setup, not the monthly. A setup fee is labour and can be '+
+          'traded for a case study; a monthly rate is far harder to raise later than it was to have started at.</div>'+
+          (sub&&sub.setupInvoiced?'<div class="sub" style="margin:0 0 .7rem">Setup has already been invoiced, so it is locked and will not be charged again.</div>':"")+
+          '<button class="btn primary" id="saveSubscription">'+(sub?"Change plan":"Start subscription")+'</button>'+
+          (sub?' <button class="btn danger" data-substatus="cancelled">Cancel subscription</button>':"")
+        : '<div class="sub" style="margin:0">Save the billing contact first.</div>')+
+    '</div></div>'+
+
+    '<div class="card"><div class="card-h"><h2>Invoices</h2>'+
+      (sub&&sub.status==="active"?'<button class="btn" id="raiseInvoice">Raise next invoice</button>':"")+
+      '</div>'+
+      ((r.invoices||[]).length
+        ? '<table><tr><th>Invoice</th><th>Amount</th><th>Status</th><th></th></tr>'+invoiceRows+'</table>'
+        : '<div class="empty">Nothing invoiced yet.</div>')+
+    '</div>';
+}
+
 async function teamView(){
   if(!agency) return '<h1>Team</h1><div class="sub">Agencies are off &mdash; Supabase is not configured, '+
     'so every client is visible to anyone who can reach this portal.</div>';
@@ -1049,9 +1255,11 @@ function clientsView(){
 async function render(){
   const m = $("main");
   if(view==="status"){ m.innerHTML = await statusView(); return; }
+  if(view==="billing"){ m.innerHTML = await billingView(); paintJobs(); return; }
   if(view==="team"){ m.innerHTML = await teamView(); return; }
   if(view==="platform"){ m.innerHTML = await platformView(); return; }
   if(view==="clients" || !current){ m.innerHTML = clientsView(); return; }
+  if(view==="client-billing"){ m.innerHTML = await clientBillingView(); paintJobs(); return; }
   if(view==="discoverability"){ m.innerHTML = await discoverabilityView(); return; }
   if(view==="overview") m.innerHTML = overviewView();
   else if(view==="profile") m.innerHTML = profileView();
@@ -1355,6 +1563,104 @@ document.addEventListener("click", async e => {
         current=null; detail=null; view="clients"; syncLocation();
         await loadClients(); await render(); toast(name+" deleted.");
       } finally { done(); }
+      return;
+    }
+
+    // --- billing ------------------------------------------------------------
+
+    if(t.dataset.bill){
+      await openClient(t.dataset.bill, "client-billing", t);
+      return;
+    }
+
+    if(t.id==="saveBillingAccount"){
+      const body = {};
+      document.querySelectorAll("[data-b]").forEach(el=>body[el.dataset.b]=el.value.trim());
+      const done = working(t, "Saving");
+      try{
+        await api("/billing/clients/"+current+"/account",{method:"PUT",body:JSON.stringify(body)});
+        await render(); toast("Billing contact saved.");
+      } finally { done(); }
+      return;
+    }
+
+    if(t.id==="saveSubscription"){
+      const body = {
+        planId: $("bPlan").value,
+        interval: $("bInterval").value,
+        monthly: $("bMonthly").value.trim(),
+        setup: $("bSetup").disabled ? undefined : $("bSetup").value.trim(),
+      };
+      const done = working(t, "Saving");
+      try{
+        const r = await api("/billing/clients/"+current+"/subscription",
+          {method:"POST",body:JSON.stringify(body)});
+        await render();
+        toast("On "+r.subscription.planName+" at "+usd(r.subscription.monthlyCents)+" a month.");
+      } finally { done(); }
+      return;
+    }
+
+    if(t.dataset.substatus){
+      const next = t.dataset.substatus;
+      if(next==="cancelled" && !confirm("Cancel this subscription? Invoices already sent are unaffected.")) return;
+
+      // The id is not in the DOM, so it is read back rather than threaded
+      // through every button that might change it.
+      const done = working(t, "Saving");
+      try{
+        const cur = await api("/billing/clients/"+current);
+        if(!cur.subscription) throw new Error("No subscription to change.");
+        await api("/billing/subscriptions/"+cur.subscription.id,
+          {method:"PATCH",body:JSON.stringify({status:next})});
+        await render(); toast(next==="cancelled"?"Cancelled.":next==="paused"?"Paused.":"Resumed.");
+      } finally { done(); }
+      return;
+    }
+
+    if(t.id==="raiseInvoice"){
+      const done = working(t, "Raising");
+      try{
+        const r = await api("/billing/clients/"+current+"/invoice",{method:"POST",body:JSON.stringify({})});
+        await render();
+        toast(r.invoice
+          ? "Invoice "+r.invoice.number+" for "+usd(r.invoice.totalCents)+"."
+          : "Nothing due — this period is already invoiced.");
+      } finally { done(); }
+      return;
+    }
+
+    if(t.dataset.paid){
+      const method = prompt("How was it paid? (bank transfer, cheque, Stripe…)", "bank transfer");
+      if(method === null) return;
+      const done = working(t, "Saving");
+      try{
+        await api("/billing/invoices/"+t.dataset.paid+"/paid",{method:"POST",body:JSON.stringify({method})});
+        await render(); toast("Marked paid.");
+      } finally { done(); }
+      return;
+    }
+
+    if(t.dataset.void){
+      if(!confirm("Void this invoice? It stays on the record, marked void.")) return;
+      const done = working(t, "Voiding");
+      try{
+        await api("/billing/invoices/"+t.dataset.void+"/void",{method:"POST",body:JSON.stringify({})});
+        await render(); toast("Voided.");
+      } finally { done(); }
+      return;
+    }
+
+    if(t.id==="billRun"){
+      const done = working(t, "Invoicing");
+      const hide = busy("Raising invoices", "One per client that is due, including any unbilled setup fee.");
+      try{
+        const r = await api("/billing/run",{method:"POST",body:JSON.stringify({})});
+        await render();
+        const total = r.issued.reduce((sum,i)=>sum+i.totalCents,0);
+        toast(r.issued.length+" invoice(s) raised, "+usd(total)+
+          (r.failed.length?" — "+r.failed.length+" failed, see the client's page":"."), 6000);
+      } finally { hide(); done(); }
       return;
     }
 
