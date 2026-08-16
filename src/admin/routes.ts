@@ -15,6 +15,7 @@ import { buildJsonLd } from "../jsonld/build";
 import { FileSource } from "../api/source/files";
 import { MANUAL_CHECKS, runTier1Audit } from "../audit/tier1";
 import { verifyMarkup } from "../audit/verify-markup";
+import { auditNap } from "../audit/nap";
 import {
   CONTENT_KINDS,
   createTenant,
@@ -446,6 +447,14 @@ export function createAdminRouter(): Router {
     }
     const result = await runScript("src/intake/run-places.ts", args);
     res.json(result);
+  });
+
+  router.get("/clients/:slug/nap", async (req: Request, res: Response) => {
+    try {
+      res.json(await auditNap(req.params.slug));
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    }
   });
 
   router.get("/clients/:slug/verify-markup", async (req: Request, res: Response) => {

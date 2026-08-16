@@ -17,7 +17,8 @@
     "portal": "tsx src/admin/server.ts",
     "vocabulary:build": "tsx scripts/build-vocabulary.ts",
     "generate:brand-faqs": "tsx src/content/generate-brand-faqs.ts",
-    "verify:markup": "tsx src/audit/verify-markup.ts"
+    "verify:markup": "tsx src/audit/verify-markup.ts",
+    "audit:nap": "tsx src/audit/nap.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",

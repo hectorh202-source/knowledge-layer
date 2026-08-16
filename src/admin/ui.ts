@@ -467,6 +467,12 @@ async function discoverabilityView(){
       '<button class="btn primary" id="runAudit">'+(r?"Re-run":"Run checks")+'</button></div></div>'+
       (r? '<table>'+autoRows+'</table>' : '<div class="empty">Not run yet. This fetches the site as each AI crawler and checks robots.txt, the sitemap and contact details.</div>')+
     '</div>'+
+    '<div class="card"><div class="card-h"><h2>Name, address &amp; phone consistency</h2>'+
+      '<button class="btn primary" id="runNap">Compare sources</button></div>'+
+      '<div class="card-b" style="padding-bottom:0"><div class="sub">Compares what the profile, the website crawl, Google and the site&rsquo;s own markup each say. '+
+      'An engine that sees two different phone numbers has no way to know they are one business, so neither record accumulates the corroboration that earns a citation.</div></div>'+
+      '<div id="napOut" class="card-b"><div class="sub" style="margin:0">Not compared yet.</div></div>'+
+    '</div>'+
     '<div class="card"><div class="card-h"><h2>Needs a person</h2><span class="meta">'+doneManual+' of '+t.manualChecks.length+' confirmed</span></div>'+
       '<div class="card-b" style="padding-bottom:0"><div class="sub">These need an account login or judgment. Unchecked means unverified, not failing.</div></div>'+
       '<table>'+manualRows+'</table></div>';
@@ -850,6 +856,37 @@ document.addEventListener("click", async e => {
       await navigator.clipboard.writeText(
         '<script type="application/ld+json">\n'+json.replace(/<\//g,"<\\/")+'\n<\/script>');
       toast("Snippet copied — paste it into the site's <head>.");
+      return;
+    }
+
+    if(t.id==="runNap"){
+      const out=$("napOut"); out.innerHTML='<div class="sub" style="margin:0">Comparing…</div>';
+      t.disabled=true;
+      let r; try { r = await api("/clients/"+current+"/nap"); } finally { t.disabled=false; }
+
+      const rows = r.findings.map(f=>{
+        const cell = f.agrees
+          ? '<div class="primary">'+esc(f.groups[0].raw)+'</div><div class="secondary">all '+
+            f.values.length+' source'+(f.values.length===1?"":"s")+' agree</div>'
+          : f.groups.map(g=>'<div class="primary">'+esc(g.raw)+'</div>'+
+              '<div class="secondary">'+esc(g.sources.join(", "))+'</div>').join('<div style="height:.35rem"></div>');
+        const pill = f.agrees ? '<span class="pill ok">agrees</span>'
+          : '<span class="pill '+(f.severity==="high"?"bad":"wait")+'">'+esc(f.severity)+'</span>';
+        return '<tr><td>'+pill+'</td><td class="primary">'+esc(f.field)+'</td><td>'+cell+'</td></tr>';
+      }).join("");
+
+      out.innerHTML =
+        (r.conflicts>0
+          ? '<div class="banner bad"><strong>'+r.conflicts+' inconsistenc'+(r.conflicts===1?"y":"ies")+'.</strong> '+
+            'Decide which value is right, set it in the business profile, then correct it wherever it disagrees.</div>'
+          : r.findings.length
+            ? '<div class="banner ok"><strong>Consistent.</strong> Every source that has an opinion agrees.</div>'
+            : '')+
+        (r.findings.length
+          ? '<table><tr><th></th><th>Field</th><th>Values</th></tr>'+rows+'</table>'
+          : '')+
+        r.notes.map(n=>'<div class="sub" style="margin:.5rem 0 0">'+esc(n)+'</div>').join("")+
+        '<div class="sub" style="margin:.5rem 0 0">Sources compared: '+esc(r.sources.join(", ")||"none")+'</div>';
       return;
     }
 

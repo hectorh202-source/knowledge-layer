@@ -44,14 +44,14 @@ export interface VerifyResult {
 
 const BUSINESS_TYPE = /Business|Organization|Plumber|Electrician|Contractor|Locksmith|Store/i;
 
-function isBusinessNode(node: Record<string, unknown>): boolean {
+export function isBusinessNode(node: Record<string, unknown>): boolean {
   const type = node["@type"];
   const types = Array.isArray(type) ? type : [type];
   return types.some((entry) => typeof entry === "string" && BUSINESS_TYPE.test(entry));
 }
 
 /** Flattens an @graph wrapper so both shapes compare the same way. */
-function nodesOf(block: Record<string, unknown>): Record<string, unknown>[] {
+export function nodesOf(block: Record<string, unknown>): Record<string, unknown>[] {
   const graph = block["@graph"];
   if (Array.isArray(graph)) {
     return graph.filter((n): n is Record<string, unknown> => typeof n === "object" && n !== null);
