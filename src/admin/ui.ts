@@ -961,13 +961,28 @@ function usd(cents){
   return "$" + n.toLocaleString("en-US", {minimumFractionDigits: n%1?2:0, maximumFractionDigits:2});
 }
 
+/** Stripe's subscription statuses, in words that mean something here. */
+function subStatus(row){
+  if(row.awaitingPayment) return '<span class="pill wait">link sent, unpaid</span>';
+  const map = {
+    active:'<span class="pill ok">active</span>',
+    trialing:'<span class="pill ok">trial</span>',
+    past_due:'<span class="pill bad">card failing</span>',
+    unpaid:'<span class="pill bad">unpaid</span>',
+    canceled:'<span class="pill">cancelled</span>',
+    incomplete:'<span class="pill wait">incomplete</span>',
+    incomplete_expired:'<span class="pill">expired</span>',
+    paused:'<span class="pill wait">paused</span>',
+  };
+  return map[row.status] || '<span class="pill">'+esc(row.status)+'</span>';
+}
+
 /**
  * Billing.
  *
- * One page, because at this size the question is always the same: who is on
- * what, and who owes me money. A separate invoices page would mean navigating
- * to find out whether anyone is overdue, which is the one thing worth seeing
- * without asking.
+ * Stripe charges the cards. This page reads what Stripe currently says and
+ * nothing else — there is no invoice to raise, no month-end run, and no
+ * ledger here to disagree with the money.
  */
 async function billingView(){
   let r;
@@ -976,247 +991,206 @@ async function billingView(){
     return '<h1>Billing</h1><div class="banner bad"><strong>Not available.</strong> '+esc(err.message)+'</div>';
   }
 
-  const plans = r.plans || [];
-  const rows = (r.rows||[]).slice().sort((a,b)=>b.overdueCents-a.overdueCents);
+  const st = r.stripe || {};
+  if(!st.enabled){
+    return '<h1>Billing</h1>'+
+      '<div class="banner warn"><strong>Stripe is not connected.</strong> '+
+      'Add <code>STRIPE_SECRET_KEY</code> to .env and restart. Billing is entirely Stripe &mdash; '+
+      'this app holds no prices, no invoices and no card details.</div>';
+  }
 
-  const statusPill = row => {
-    if(row.status==="none") return '<span class="pill wait">no plan</span>';
-    if(row.status==="active") return '<span class="pill ok">active</span>';
-    if(row.status==="paused") return '<span class="pill wait">paused</span>';
-    if(row.status==="trialing") return '<span class="pill wait">trial</span>';
-    return '<span class="pill bad">cancelled</span>';
-  };
+  const noPlans = !(r.prices && r.prices.recurring && r.prices.recurring.length);
 
-  const body = rows.map(row=>
-    '<tr><td><div class="primary">'+esc(row.companyName||row.tenantSlug)+'</div>'+
-      (row.contactEmail?'<div class="secondary">'+esc(row.contactEmail)+'</div>':'<div class="secondary">no billing contact</div>')+'</td>'+
-    '<td class="meta">'+statusPill(row)+'</td>'+
-    '<td class="meta">'+(row.status==="none" ? "—"
-      : usd(row.monthlyCents)+(row.interval==="annual"?" /mo, billed yearly":" /mo")+
-        (row.isCustomRate?' <span class="pill wait">custom</span>':''))+'</td>'+
-    '<td class="meta">'+(row.nextInvoiceOn||"—")+
-      (row.setupOwed?'<div class="secondary">setup not yet billed</div>':'')+'</td>'+
-    '<td class="meta">'+(row.overdueCents>0
-      ? '<span class="pill bad">'+usd(row.overdueCents)+' overdue</span>'
-      : row.openCents>0 ? usd(row.openCents)+' open' : '—')+'</td>'+
+  const rows = (r.rows||[]).slice().sort((a,b)=>b.overdueCents-a.overdueCents).map(row=>
+    '<tr><td><div class="primary">'+esc(row.tenantSlug)+'</div>'+
+      (row.contactEmail?'<div class="secondary">'+esc(row.contactEmail)+'</div>':'')+'</td>'+
+    '<td class="meta">'+subStatus(row)+
+      (row.cancelAtPeriodEnd?'<div class="secondary">ends '+esc(row.renewsOn||"")+'</div>':'')+'</td>'+
+    '<td class="meta">'+(row.amountCents?usd(row.amountCents)+' /'+esc(row.interval):'&mdash;')+'</td>'+
+    '<td class="meta">'+(row.cancelAtPeriodEnd?'&mdash;':esc(row.renewsOn||"—"))+'</td>'+
+    '<td class="meta">'+(row.overdueCents>0?'<span class="pill bad">'+usd(row.overdueCents)+'</span>':'&mdash;')+'</td>'+
     '<td class="meta"><button class="btn" data-bill="'+esc(row.tenantSlug)+'">Open</button></td></tr>'
   ).join("");
 
-  const stat=(v,l,cls)=>'<div class="stat'+(cls?" "+cls:"")+'"><div class="n">'+v+'</div><div class="l">'+l+'</div></div>';
+  const stat=(v,l)=>'<div class="stat"><div class="n">'+v+'</div><div class="l">'+l+'</div></div>';
 
-  const st = r.stripe || {};
+  return '<h1>Billing</h1><div class="sub">Stripe charges the cards. This reads what Stripe says &mdash; '+
+    'there is no invoice to raise and no month-end run.</div>'+
 
-  return '<h1>Billing</h1><div class="sub">What each client is on, and what is outstanding. '+
-    'Invoices are raised here and collected by Stripe; no card details are held in this app.</div>'+
+    (st.mode==="live"
+      ? '<div class="banner bad"><strong>LIVE mode.</strong> Payment links take real money.</div>'
+      : '<div class="banner ok"><strong>Test mode.</strong> Links are payable with test cards and nothing is charged. '+
+        'Swap the key in .env when you are ready.</div>')+
 
-    (st.enabled
-      ? (st.mode==="live"
-          ? '<div class="banner bad"><strong>Stripe is in LIVE mode.</strong> Invoices raised here go to real customers '+
-            'and take real money. Nothing sends by itself &mdash; an invoice is only emailed when you press Send.</div>'
-          : '<div class="banner ok"><strong>Stripe is in test mode.</strong> Invoices are real objects in your Stripe test '+
-            'account and nothing is charged. Switch the key in .env when you are ready.</div>')
-      : '<div class="banner warn"><strong>Stripe is not connected.</strong> Invoices are still raised and tracked here, '+
-        'and you mark them paid by hand. Add <code>STRIPE_SECRET_KEY</code> to .env for payment pages and automatic reconciliation.</div>')+
-
-    (r.synced && r.synced.paid && r.synced.paid.length
-      ? '<div class="banner ok"><strong>'+r.synced.paid.length+' invoice'+(r.synced.paid.length===1?"":"s")+
-        ' marked paid from Stripe</strong> just now &mdash; '+esc(r.synced.paid.join(", "))+'.</div>'
+    (noPlans
+      ? '<div class="banner split warn"><span><strong>No plans in Stripe yet.</strong> '+
+        'Creates two products &mdash; ' + usd(80000) + ' a month and a ' + usd(250000) + ' one-off setup &mdash; '+
+        'which you can then edit in the Stripe dashboard. Prices live there, not here.</span>'+
+        '<button class="btn primary" id="seedCatalog">Create them</button></div>'
       : '')+
 
     (r.overdueCents>0
       ? '<div class="banner bad"><strong>'+usd(r.overdueCents)+' overdue.</strong> '+
-        'Nothing is cut off &mdash; an overdue invoice never stops a client being served, because a billing '+
-        'problem should not become their discoverability outage.</div>'
-      : '')+
-
-    ((r.due||[]).length
-      ? '<div class="banner split warn"><span><strong>'+r.due.length+' client'+(r.due.length===1?" is":"s are")+' due to be invoiced.</strong> '+
-        'Raises one invoice each for the coming period, including any unbilled setup fee. Safe to press twice &mdash; '+
-        'a period already invoiced is skipped.</span>'+
-        '<button class="btn primary" id="billRun">Invoice '+r.due.length+'</button></div>'
+        'Stripe is retrying those cards. Nothing is cut off &mdash; a failed card should not become '+
+        'a client&rsquo;s discoverability outage.</div>'
       : '')+
 
     '<div class="grid">'+
       stat(usd(r.mrrCents),"Monthly recurring")+
       stat(usd(r.mrrCents*12),"Annual run rate")+
-      stat(usd(r.openCents),"Open invoices")+
-      stat(usd(r.overdueCents),"Overdue")+
+      stat(r.activeCount,"Paying")+
+      stat(r.awaitingCount,"Awaiting payment")+
     '</div>'+
 
-    '<div class="card"><div class="card-h"><h2>Clients</h2><div class="row">'+
-      '<span class="meta">'+r.activeCount+' active</span>'+
-      (st.enabled?'<button class="btn quiet" id="billSync">Check Stripe for payments</button>':'')+
-      '</div></div>'+
+    '<div class="card"><div class="card-h"><h2>Clients</h2></div>'+
       (rows.length
-        ? '<table><tr><th>Client</th><th>Status</th><th>Rate</th><th>Next invoice</th><th>Outstanding</th><th></th></tr>'+body+'</table>'
-        : '<div class="empty">No client has a billing account yet. Open one from its Billing tab.</div>')+
+        ? '<table><tr><th>Client</th><th>Status</th><th>Rate</th><th>Renews</th><th>Overdue</th><th></th></tr>'+rows+'</table>'
+        : '<div class="empty">Nobody is being billed yet. Open a client below to start.</div>')+
     '</div>'+
 
     ((r.unbilledSlugs||[]).length
-      ? '<div class="card"><div class="card-h"><h2>Not set up for billing</h2>'+
-        '<span class="meta">'+r.unbilledSlugs.length+'</span></div><div class="card-b">'+
-        '<div class="sub">These clients exist in the portal but have no billing account, so they are invisible to '+
-        'every number above &mdash; including the run rate.</div>'+
+      ? '<div class="card"><div class="card-h"><h2>Not billed</h2><span class="meta">'+r.unbilledSlugs.length+'</span></div>'+
+        '<div class="card-b"><div class="sub">No plan and no payment link, so they count towards nothing above.</div>'+
         '<div class="row">'+r.unbilledSlugs.map(sl=>
-          '<button class="btn quiet" data-bill="'+esc(sl)+'">'+esc(sl)+'</button>').join("")+
+          '<button class="btn quiet" data-bill="'+esc(sl)+'">'+esc(sl)+' &rarr;</button>').join("")+
         '</div></div></div>'
       : '')+
 
-    (r.unbilledSetupCents>0
-      ? '<div class="card"><div class="card-b"><div class="sub" style="margin:0">'+
-        '<strong>'+usd(r.unbilledSetupCents)+' of setup fees not yet invoiced.</strong> '+
-        'Setup is charged once per client and is added automatically to their first invoice.</div></div></div>'
-      : '')+
-
-    '<div class="card"><div class="card-h"><h2>Plans</h2></div><div class="card-b">'+
-      (plans.length
-        ? '<table><tr><th>Plan</th><th>Setup</th><th>Monthly</th></tr>'+
-          plans.map(pl=>'<tr><td>'+esc(pl.name)+'</td><td class="meta">'+usd(pl.setupCents)+
-            '</td><td class="meta">'+usd(pl.monthlyCents)+'</td></tr>').join("")+'</table>'
-        : '<div class="sub" style="margin:0">No plans. Apply the billing migration.</div>')+
-      '<div class="sub" style="margin:.7rem 0 0">Plans are edited in the database, deliberately. '+
-      'A price is the one number that should not be a click away from being changed for everyone at once &mdash; '+
-      'a single client\'s rate is overridden on their own page instead.</div>'+
-    '</div></div>';
+    '<div class="card"><div class="card-b"><div class="sub" style="margin:0">'+
+      '<strong>Prices are edited in Stripe</strong>, not here. There is deliberately no second copy &mdash; '+
+      'a price that exists in two places is a price that will eventually disagree with itself.</div></div></div>';
 }
 
 /**
- * One client's billing: who is invoiced, what they pay, what has been sent.
+ * One client's billing.
  *
- * Separate from the client's Settings because settings are operational — how we
- * work on them — and this is commercial. Mixing the two puts a price field next
- * to a crawl URL, where an accidental edit to either is equally easy.
+ * Two clicks to start: pick the plan, press the button. The client pays once
+ * and Stripe charges the card every month after that. Nothing here is touched
+ * again unless something changes.
  */
 async function clientBillingView(){
-  const slug = current;
   let r;
-  try { r = await api("/billing/clients/"+slug); }
+  try { r = await api("/billing/clients/"+current); }
   catch(err){
     return '<h1>Billing</h1><div class="banner bad"><strong>Not available.</strong> '+esc(err.message)+'</div>';
   }
 
-  const acc = r.account, sub = r.subscription, plans = r.plans||[];
-  const stripeOn = !!(r.stripe && r.stripe.enabled);
-  const name = detail && detail.settings ? detail.settings.name : slug;
+  const name = detail && detail.settings ? detail.settings.name : current;
+  const st = r.stripe || {};
+  const acc = r.account, sub = r.subscription;
+  const rec = (r.prices && r.prices.recurring) || [];
+  const one = (r.prices && r.prices.oneOff) || [];
 
-  const invoiceRows = (r.invoices||[]).map(inv=>{
-    const overdue = inv.status==="issued" && inv.dueOn && inv.dueOn < new Date().toISOString().slice(0,10);
-    const pill = inv.status==="paid" ? '<span class="pill ok">paid</span>'
-      : inv.status==="void" ? '<span class="pill">void</span>'
-      : overdue ? '<span class="pill bad">overdue</span>' : '<span class="pill wait">issued</span>';
+  if(!st.enabled){
+    return '<h1>Billing</h1><div class="banner warn"><strong>Stripe is not connected.</strong> '+
+      'Add <code>STRIPE_SECRET_KEY</code> to .env and restart.</div>';
+  }
 
-    // A test-mode invoice sitting in the list next to live ones is how someone
-    // chases a payment that was never real.
-    const modeTag = inv.providerMode==="test" ? ' <span class="pill wait">test</span>' : '';
+  // --- paying already -------------------------------------------------------
+  if(sub && sub.live){
+    const invoiceRows = (r.invoices||[]).map(inv=>
+      '<tr><td><div class="primary">'+esc(inv.number||inv.id)+'</div>'+
+        '<div class="secondary">'+esc(inv.createdOn||"")+'</div></td>'+
+      '<td class="meta">'+usd(inv.amountCents)+'</td>'+
+      '<td class="meta">'+(inv.status==="paid"
+        ? '<span class="pill ok">paid</span>'
+        : inv.status==="open" ? '<span class="pill wait">open</span>'
+        : '<span class="pill">'+esc(inv.status)+'</span>')+'</td>'+
+      '<td class="meta">'+(inv.url?'<a class="btn quiet" href="'+esc(inv.url)+'" target="_blank" rel="noopener">View ↗</a>':'')+'</td></tr>'
+    ).join("");
 
-    const actions = inv.status!=="issued" ? ""
-      : '<div class="toggle">'+
-          (inv.providerUrl
-            ? '<a class="btn quiet" href="'+esc(inv.providerUrl)+'" target="_blank" rel="noopener">Payment page ↗</a>'
-            : "")+
-          (stripeOn && inv.providerRef
-            ? '<button class="btn" data-send="'+esc(inv.id)+'">Send</button>'
-            : stripeOn
-              ? '<button class="btn" data-push="'+esc(inv.id)+'">Push to Stripe</button>'
-              : "")+
-          '<button class="btn" data-paid="'+esc(inv.id)+'">Mark paid</button>'+
-          '<button class="btn danger" data-void="'+esc(inv.id)+'">Void</button>'+
-        '</div>';
+    const paid = (r.invoices||[]).reduce((t,i)=>t+i.amountPaidCents,0);
 
-    return '<tr><td><div class="primary">'+esc(inv.number)+modeTag+'</div>'+
-      '<div class="secondary">'+(inv.periodStart?esc(inv.periodStart)+' to '+esc(inv.periodEnd):"—")+'</div></td>'+
-      '<td class="meta">'+usd(inv.totalCents)+'</td>'+
-      '<td class="meta">'+pill+(inv.dueOn&&inv.status==="issued"?'<div class="secondary">due '+esc(inv.dueOn)+'</div>':"")+
-        (inv.paidOn?'<div class="secondary">'+esc(inv.paidOn)+(inv.paidMethod?' · '+esc(inv.paidMethod):"")+'</div>':"")+'</td>'+
-      '<td class="meta">'+actions+'</td></tr>';
-  }).join("");
+    return '<h1>Billing</h1><div class="sub">'+esc(name)+' is being charged automatically by Stripe.</div>'+
 
-  const planOptions = plans.map(pl=>
-    '<option value="'+esc(pl.id)+'"'+(sub&&sub.planId===pl.id?' selected':'')+'>'+
-    esc(pl.name)+' — '+usd(pl.setupCents)+' setup, '+usd(pl.monthlyCents)+'/mo</option>').join("");
+      (st.mode==="live"?'':'<div class="banner ok"><strong>Test mode.</strong> No real money is moving.</div>')+
 
-  const invs = r.invoices || [];
-  const totalPaid = invs.filter(i=>i.status==="paid").reduce((t,i)=>t+i.totalCents,0);
-  const totalOpen = invs.filter(i=>i.status==="issued").reduce((t,i)=>t+i.totalCents,0);
-  const stat=(v,l)=>'<div class="stat"><div class="n">'+v+'</div><div class="l">'+l+'</div></div>';
+      (sub.status==="past_due"
+        ? '<div class="banner bad"><strong>Their card is failing.</strong> Stripe is retrying on its own schedule. '+
+          'Nothing is cut off, and nothing here needs doing unless it keeps failing.</div>'
+        : sub.cancelAtPeriodEnd
+          ? '<div class="banner split warn"><span><strong>Cancelling on '+esc(sub.renewsOn||"")+'.</strong> '+
+            'They keep the month they have paid for.</span>'+
+            '<button class="btn primary" id="resumeSub">Keep them on</button></div>'
+          : '<div class="banner ok"><strong>'+usd(sub.amountCents)+' every '+esc(sub.interval)+'.</strong> '+
+            'Next charge '+esc(sub.renewsOn||"—")+'. Card on file, charged automatically.</div>')+
 
-  return '<h1>Billing</h1><div class="sub">What '+esc(name)+' pays, and what has been sent.</div>'+
-
-    (r.synced && r.synced.paid && r.synced.paid.length
-      ? '<div class="banner ok"><strong>Payment received.</strong> '+
-        esc(r.synced.paid.join(", "))+' just came back from Stripe as paid.</div>'
-      : '')+
-
-    (stripeOn && r.stripe.mode==="live"
-      ? '<div class="banner bad"><strong>Stripe is in LIVE mode.</strong> Anything raised here is real money.</div>'
-      : '')+
-
-    (invs.length
-      ? '<div class="grid">'+stat(usd(totalPaid),"Paid to date")+stat(usd(totalOpen),"Outstanding")+
-        stat(sub&&sub.status==="active"?usd(sub.monthlyCents):"—","Monthly")+'</div>'
-      : '')+
-
-    (!acc
-      ? '<div class="banner warn"><strong>No billing account yet.</strong> Fill in the contact below and save &mdash; '+
-        'until then this client is invisible to every number on the Billing page, including the run rate.</div>'
-      : "")+
-
-    (sub && sub.status==="active"
-      ? '<div class="banner ok"><strong>'+usd(sub.monthlyCents)+
-        (sub.interval==="annual"?' a month, billed yearly.':' a month.')+'</strong> '+
-        'On '+esc(sub.planName)+' since '+esc(sub.startedOn)+'. Next invoice '+esc(sub.nextInvoiceOn)+'.'+
-        (sub.setupInvoiced?'':' Setup of '+usd(sub.setupCents)+' has not been billed yet and will be added to the next one.')+
-        '</div>'
-      : "")+
-
-    '<div class="card"><div class="card-h"><h2>Who gets the invoice</h2></div><div class="card-b">'+
-      '<div class="sub" style="margin:0 0 .7rem">Deliberately not the profile email. That address publishes &mdash; it is '+
-      'where their customers write. An invoice goes to whoever does their books.</div>'+
-      (stripeOn
-        ? '<div class="sub" style="margin:0 0 .7rem">This is also the address Stripe uses for the customer record and '+
-          'for anything you send from here.</div>'
-        : "")+
-      '<div class="cols2">'+
-        '<label class="f"><span>Company name</span><input data-b="companyName" value="'+esc(acc?acc.companyName:"")+'" placeholder="'+esc(name)+'"></label>'+
-        '<label class="f"><span>Billing email</span><input data-b="contactEmail" type="email" value="'+esc(acc?acc.contactEmail:"")+'" placeholder="accounts@example.com"></label>'+
-        '<label class="f"><span>Contact name</span><input data-b="contactName" value="'+esc(acc?acc.contactName:"")+'" placeholder="Who to address it to"></label>'+
+      '<div class="grid">'+
+        '<div class="stat"><div class="n">'+usd(paid)+'</div><div class="l">Paid to date</div></div>'+
+        '<div class="stat"><div class="n">'+usd(sub.amountCents)+'</div><div class="l">Per '+esc(sub.interval)+'</div></div>'+
+        '<div class="stat"><div class="n">'+esc(sub.startedOn||"—")+'</div><div class="l">Since</div></div>'+
       '</div>'+
-      '<label class="f"><span>Notes</span><textarea data-b="notes" style="min-height:3.5rem">'+esc(acc?acc.notes:"")+'</textarea></label>'+
-      '<button class="btn primary" id="saveBillingAccount">Save</button>'+
-    '</div></div>'+
 
-    '<div class="card"><div class="card-h"><h2>'+(sub?"Change the plan":"Put them on a plan")+'</h2>'+
-      (sub&&sub.status==="active"?'<button class="btn quiet" data-substatus="paused">Pause</button>':"")+
-      (sub&&sub.status==="paused"?'<button class="btn quiet" data-substatus="active">Resume</button>':"")+
-      '</div><div class="card-b">'+
-      (acc
-        ? '<div class="cols2">'+
-            '<label class="f"><span>Plan</span><select id="bPlan">'+planOptions+'</select></label>'+
-            '<label class="f"><span>Billing interval</span><select id="bInterval">'+
-              '<option value="monthly"'+(sub&&sub.interval==="monthly"?" selected":"")+'>Monthly</option>'+
-              '<option value="annual"'+(sub&&sub.interval==="annual"?" selected":"")+'>Annual</option>'+
-            '</select></label>'+
-            '<label class="f"><span>Monthly rate override</span><input id="bMonthly" placeholder="blank = the plan\'s price" value="'+
-              (sub&&sub.isCustomRate?(sub.monthlyCents/100):"")+'"></label>'+
-            '<label class="f"><span>Setup fee</span><input id="bSetup" placeholder="blank = the plan\'s setup" value="'+
-              (sub?(sub.setupCents/100):"")+'"'+(sub&&sub.setupInvoiced?' disabled':'')+'></label>'+
+      '<div class="card"><div class="card-h"><h2>Payments</h2>'+
+        '<button class="btn quiet" id="stripePortal">Manage card in Stripe ↗</button></div>'+
+        (invoiceRows
+          ? '<table><tr><th>Invoice</th><th>Amount</th><th>Status</th><th></th></tr>'+invoiceRows+'</table>'
+          : '<div class="empty">No payments yet.</div>')+
+      '</div>'+
+
+      (sub.cancelAtPeriodEnd?'':
+        '<div class="card"><div class="card-b"><div class="row" style="justify-content:space-between">'+
+          '<div class="sub" style="margin:0">Cancelling stops the next charge. They keep the period they have paid for.</div>'+
+          '<button class="btn danger" id="cancelSub">Cancel subscription</button>'+
+        '</div></div></div>');
+  }
+
+  // --- not paying yet -------------------------------------------------------
+  if(!rec.length){
+    return '<h1>Billing</h1><div class="banner warn"><strong>No plans in Stripe.</strong> '+
+      'Create them on the Billing page first &mdash; sidebar &rarr; Billing.</div>';
+  }
+
+  const planOptions = rec.map(pr=>
+    '<option value="'+esc(pr.id)+'">'+esc(pr.productName)+' — '+usd(pr.amountCents)+' / '+esc(pr.interval)+'</option>').join("");
+
+  const setupOptions = '<option value="">No setup fee</option>' + one.map(pr=>
+    '<option value="'+esc(pr.id)+'"'+(/setup/i.test(pr.productName)?' selected':'')+'>'+
+    esc(pr.productName)+' — '+usd(pr.amountCents)+'</option>').join("");
+
+  const link = acc && acc.paymentLinkUrl;
+  const staleMode = link && acc.stripeMode && acc.stripeMode !== st.mode;
+
+  return '<h1>Billing</h1><div class="sub">Put '+esc(name)+' on a plan and send them one link. '+
+    'They pay once; Stripe charges the card every month after that.</div>'+
+
+    (st.mode==="live"
+      ? '<div class="banner bad"><strong>LIVE mode.</strong> This link takes real money.</div>'
+      : '<div class="banner ok"><strong>Test mode.</strong> Pay it with <code>4242 4242 4242 4242</code>, any future expiry, any CVC.</div>')+
+
+    (staleMode
+      ? '<div class="banner warn"><strong>That link was made in '+esc(acc.stripeMode)+' mode.</strong> '+
+        'It will not work now. Create a new one.</div>'
+      : '')+
+
+    (link && !staleMode
+      ? '<div class="card"><div class="card-h"><h2>Payment link</h2>'+
+          '<span class="meta">waiting for payment</span></div><div class="card-b">'+
+          '<div class="sub" style="margin:0 0 .6rem">Send this to them. It sets up the subscription and takes '+
+          'the setup fee in one payment.</div>'+
+          '<input id="payLink" readonly value="'+esc(link)+'" style="margin-bottom:.6rem">'+
+          '<div class="row">'+
+            '<button class="btn primary" id="copyPayLink">Copy link</button>'+
+            '<a class="btn quiet" href="'+esc(link)+'" target="_blank" rel="noopener">Open ↗</a>'+
+            (acc.contactEmail
+              ? '<a class="btn quiet" href="mailto:'+esc(acc.contactEmail)+
+                '?subject='+encodeURIComponent("Getting started")+
+                '&body='+encodeURIComponent("Here is the link to get started:\n\n"+link)+'">Email it ↗</a>'
+              : '')+
           '</div>'+
-          '<div class="sub" style="margin:0 0 .7rem">Discount the setup, not the monthly. A setup fee is labour and can be '+
-          'traded for a case study; a monthly rate is far harder to raise later than it was to have started at.</div>'+
-          (sub&&sub.setupInvoiced?'<div class="sub" style="margin:0 0 .7rem">Setup has already been invoiced, so it is locked and will not be charged again.</div>':"")+
-          '<button class="btn primary" id="saveSubscription">'+(sub?"Change plan":"Start subscription")+'</button>'+
-          (sub?' <button class="btn danger" data-substatus="cancelled">Cancel subscription</button>':"")
-        : '<div class="sub" style="margin:0">Save the billing contact first.</div>')+
-    '</div></div>'+
+        '</div></div>'
+      : '')+
 
-    '<div class="card"><div class="card-h"><h2>Invoices</h2><div class="row">'+
-      (stripeOn&&totalOpen>0?'<button class="btn quiet" id="syncClient">Check Stripe</button>':"")+
-      (sub&&sub.status==="active"?'<button class="btn" id="raiseInvoice">Raise next invoice</button>':"")+
-      '</div></div>'+
-      ((r.invoices||[]).length
-        ? '<table><tr><th>Invoice</th><th>Amount</th><th>Status</th><th></th></tr>'+invoiceRows+'</table>'
-        : '<div class="empty">Nothing invoiced yet.</div>')+
-    '</div>';
+    '<div class="card"><div class="card-h"><h2>'+(link?"Change the plan":"Start billing")+'</h2></div><div class="card-b">'+
+      '<div class="cols2">'+
+        '<label class="f"><span>Plan</span><select id="bPlan">'+planOptions+'</select></label>'+
+        '<label class="f"><span>Setup fee</span><select id="bSetup">'+setupOptions+'</select></label>'+
+      '</div>'+
+      '<label class="f"><span>Their email <span class="meta">optional — they can type it at checkout</span></span>'+
+        '<input id="bEmail" type="email" value="'+esc(acc?acc.contactEmail:"")+'" placeholder="accounts@example.com"></label>'+
+      '<button class="btn primary" id="startBilling">'+(link?"Replace the link":"Create payment link")+'</button>'+
+      (link?'<div class="sub" style="margin:.7rem 0 0">The current link stops working, so nobody can pay the old price by accident.</div>':'')+
+    '</div></div>';
 }
 
 async function teamView(){
@@ -1638,141 +1612,82 @@ document.addEventListener("click", async e => {
       return;
     }
 
-    if(t.id==="saveBillingAccount"){
-      const body = {};
-      document.querySelectorAll("[data-b]").forEach(el=>body[el.dataset.b]=el.value.trim());
-      const done = working(t, "Saving");
+    if(t.id==="seedCatalog"){
+      const done = working(t, "Creating");
       try{
-        await api("/billing/clients/"+current+"/account",{method:"PUT",body:JSON.stringify(body)});
-        await render(); toast("Billing contact saved.");
-      } finally { done(); }
-      return;
-    }
-
-    if(t.id==="saveSubscription"){
-      const body = {
-        planId: $("bPlan").value,
-        interval: $("bInterval").value,
-        monthly: $("bMonthly").value.trim(),
-        setup: $("bSetup").disabled ? undefined : $("bSetup").value.trim(),
-      };
-      const done = working(t, "Saving");
-      try{
-        const r = await api("/billing/clients/"+current+"/subscription",
-          {method:"POST",body:JSON.stringify(body)});
+        const r = await api("/billing/catalog",{method:"POST",body:JSON.stringify({})});
         await render();
-        toast("On "+r.subscription.planName+" at "+usd(r.subscription.monthlyCents)+" a month.");
+        toast("Created "+r.monthly.productName+" and "+r.setup.productName+" in Stripe.");
       } finally { done(); }
       return;
     }
 
-    if(t.dataset.substatus){
-      const next = t.dataset.substatus;
-      if(next==="cancelled" && !confirm("Cancel this subscription? Invoices already sent are unaffected.")) return;
+    /**
+     * The whole flow, in one press.
+     *
+     * Creates the payment link. The client pays it once and Stripe charges
+     * their card every month afterwards — there is no invoice to raise here,
+     * this month or any other.
+     */
+    if(t.id==="startBilling"){
+      const setup = $("bSetup").value;
+      const replacing = t.textContent.indexOf("Replace") !== -1;
+      if(replacing && !confirm("Create a new link? The current one stops working immediately.")) return;
 
-      // The id is not in the DOM, so it is read back rather than threaded
-      // through every button that might change it.
-      const done = working(t, "Saving");
+      const done = working(t, "Creating");
       try{
-        const cur = await api("/billing/clients/"+current);
-        if(!cur.subscription) throw new Error("No subscription to change.");
-        await api("/billing/subscriptions/"+cur.subscription.id,
-          {method:"PATCH",body:JSON.stringify({status:next})});
-        await render(); toast(next==="cancelled"?"Cancelled.":next==="paused"?"Paused.":"Resumed.");
-      } finally { done(); }
-      return;
-    }
-
-    if(t.id==="raiseInvoice"){
-      const done = working(t, "Raising");
-      try{
-        const r = await api("/billing/clients/"+current+"/invoice",{method:"POST",body:JSON.stringify({})});
+        await api("/billing/clients/"+current+"/start",{method:"POST",body:JSON.stringify({
+          priceId: $("bPlan").value,
+          setupPriceId: setup || null,
+          contactEmail: $("bEmail").value.trim(),
+        })});
         await render();
-        toast(r.invoice
-          ? "Invoice "+r.invoice.number+" for "+usd(r.invoice.totalCents)+
-            (r.invoice.providerUrl?" — payment page ready below." : stripeOn?" — not in Stripe yet, press Push." : ".")
-          : "Nothing due — this period is already invoiced.", 6000);
+        // Straight to the clipboard: the link is the only reason the button was
+        // pressed, and making someone hunt for it afterwards is the sort of
+        // step this rebuild exists to remove.
+        const box = $("payLink");
+        if(box){
+          try{ await navigator.clipboard.writeText(box.value); toast("Link created and copied — send it to them."); }
+          catch{ toast("Link created — copy it below."); }
+        }
       } finally { done(); }
       return;
     }
 
-    if(t.dataset.paid){
-      const method = prompt("How was it paid? (bank transfer, cheque, Stripe…)", "bank transfer");
-      if(method === null) return;
-      const done = working(t, "Saving");
+    if(t.id==="copyPayLink"){
+      await navigator.clipboard.writeText($("payLink").value);
+      toast("Copied.");
+      return;
+    }
+
+    if(t.id==="cancelSub"){
+      if(!confirm("Cancel at the end of the paid period? They keep the month they have paid for.")) return;
+      const done = working(t, "Cancelling");
       try{
-        await api("/billing/invoices/"+t.dataset.paid+"/paid",{method:"POST",body:JSON.stringify({method})});
-        await render(); toast("Marked paid.");
+        await api("/billing/clients/"+current+"/cancel",{method:"POST",body:JSON.stringify({})});
+        await render(); toast("Cancelling at period end.");
       } finally { done(); }
       return;
     }
 
-    if(t.dataset.void){
-      if(!confirm("Void this invoice? It stays on the record, marked void.")) return;
-      const done = working(t, "Voiding");
+    if(t.id==="resumeSub"){
+      const done = working(t, "Resuming");
       try{
-        await api("/billing/invoices/"+t.dataset.void+"/void",{method:"POST",body:JSON.stringify({})});
-        await render(); toast("Voided.");
+        await api("/billing/clients/"+current+"/resume",{method:"POST",body:JSON.stringify({})});
+        await render(); toast("Still on — the next charge will go ahead.");
       } finally { done(); }
       return;
     }
 
-    if(t.id==="syncClient"){
-      const done = working(t, "Checking");
+    if(t.id==="stripePortal"){
+      const done = working(t, "Opening");
       try{
-        const r = await api("/billing/reconcile",{method:"POST",body:JSON.stringify({slug:current})});
-        await render();
-        toast(r.paid.length
-          ? "Paid: "+r.paid.join(", ")
-          : "Checked "+r.checked+" open invoice(s) — Stripe has not recorded payment yet.");
+        const r = await api("/billing/clients/"+current+"/portal",{method:"POST",body:JSON.stringify({})});
+        window.open(r.url, "_blank", "noopener");
       } finally { done(); }
       return;
     }
 
-    if(t.id==="billSync"){
-      const done = working(t, "Checking");
-      try{
-        const r = await api("/billing/reconcile",{method:"POST",body:JSON.stringify({})});
-        await render();
-        toast(r.paid.length
-          ? r.paid.length+" marked paid: "+r.paid.join(", ")
-          : "Checked "+r.checked+" open invoice(s) — none paid yet.");
-      } finally { done(); }
-      return;
-    }
-
-    if(t.dataset.push){
-      const done = working(t, "Pushing");
-      try{
-        const r = await api("/billing/invoices/"+t.dataset.push+"/push",{method:"POST",body:JSON.stringify({})});
-        await render();
-        toast(r.invoice.providerUrl ? "In Stripe — payment page ready." : "Pushed to Stripe.");
-      } finally { done(); }
-      return;
-    }
-
-    if(t.dataset.send){
-      if(!confirm("Email this invoice to the billing contact through Stripe?")) return;
-      const done = working(t, "Sending");
-      try{
-        await api("/billing/invoices/"+t.dataset.send+"/send",{method:"POST",body:JSON.stringify({})});
-        await render(); toast("Sent.");
-      } finally { done(); }
-      return;
-    }
-
-    if(t.id==="billRun"){
-      const done = working(t, "Invoicing");
-      const hide = busy("Raising invoices", "One per client that is due, including any unbilled setup fee.");
-      try{
-        const r = await api("/billing/run",{method:"POST",body:JSON.stringify({})});
-        await render();
-        const total = r.issued.reduce((sum,i)=>sum+i.totalCents,0);
-        toast(r.issued.length+" invoice(s) raised, "+usd(total)+
-          (r.failed.length?" — "+r.failed.length+" failed, see the client's page":"."), 6000);
-      } finally { hide(); done(); }
-      return;
-    }
 
     if(t.id==="runAudit"){
       const at = {slug:current, view};

@@ -131,50 +131,70 @@ Mounted at `/admin/api`. Requires a session.
 
 ## Billing
 
-A ledger, not a payment processor. No card details are held here.
+**Stripe owns billing.** The price, the subscription, the monthly charge, the
+card retries, the receipts. This app knows which Stripe customer is which
+client of ours and reads everything else live.
 
 | | |
 |---|---|
-| Model | Setup fee once per client, plus a monthly. Direct clients only for now |
-| Starting plan | $2,500 setup, $800/month |
-| Storage | Supabase only — cross-tenant, and it is money, so no file fallback |
-| Enforcement | Overdue is flagged, never enforced. A billing problem must not become a client's discoverability outage |
-| Payments | Stripe, optional. Without a key the ledger still works and you mark invoices paid by hand |
+| Starting prices | $800/month plus a $2,500 one-off setup, both Stripe products |
+| Local state | One table: `billing_accounts`, mapping a tenant slug to a Stripe customer and payment link |
+| Enforcement | None. Stripe retries a failing card on its own schedule; nothing here cuts a client off |
 
-### Stripe
+### Two clicks
 
-**A payment rail, not a source of truth.** This app owns the schedule — who
-is on what, when the next period starts, what it costs. Stripe is asked to
-collect one invoice and asked back later whether it was paid.
+Pick the plan, press **Create payment link**. The link is copied to the
+clipboard. Send it. The client pays once and Stripe charges the card every
+month from then on.
 
-Deliberately **not** Stripe Subscriptions. Those put the same facts in two
-systems that can disagree: a price changed in the dashboard and not here, a
-subscription cancelled there and still active here, and no way to say which is
-right.
+There is nothing to do monthly. No invoice to raise, no month-end run, no
+send. That is the whole point of the rebuild — the first version kept a ledger
+here and used Stripe only to collect, which meant four clicks and two forms to
+start a client and then a manual raise-and-send every month, forever.
 
-**Reconciliation is polled, not pushed.** Loading the billing page asks Stripe
-about the open invoices and marks the paid ones paid. A webhook needs a public
-URL and therefore a deployment; polling needs neither and is a handful of
-requests at this size. Webhooks are worth adding in the hundreds of clients.
+### Why no local ledger
 
-**Mode comes from the key** — `sk_test_` or `sk_live_` — never a separate
-setting, because a flag that can disagree with the key is a way to believe you
-are testing while charging a real card. Every billing screen states which mode
-it is in, and test-mode invoices are tagged in the list.
+There was one: plans, subscriptions and invoices, three tables. It is gone.
+Keeping the schedule here meant reimplementing what Stripe already does
+better, including card retries, and it produced a flow that needed a manual.
 
-Nothing sends by itself. `auto_advance` is off, so Stripe never decides on its
-own to email a customer; **Send** is always an explicit press. Invoices are
-pushed with our own invoice number as the idempotency key, so a double-click
-cannot bill a period twice.
+The cost of reading live is a request or two per page. The benefit is that a
+price changed in the Stripe dashboard is correct here immediately, and there
+is no second copy of anything to drift.
 
-Amounts are integer cents everywhere. Plan prices are edited in the database
-on purpose — a price is the one number that should not be a click away from
-changing for everyone at once. A single client's rate is overridden on their
-own Billing page.
+**Prices live in Stripe, not here.** A price that exists in two places is a
+price that will eventually disagree with itself.
 
-Invoices are immutable once issued. Getting one wrong is corrected by voiding
-it and raising another, which is what the `void` status is for.
+### Payment links, not Checkout sessions
 
+A Checkout session needs a `success_url` the customer's browser can reach, and
+the portal runs on localhost — the customer would be redirected to a machine
+that is not theirs. A payment link is hosted end to end by Stripe, needs no
+public URL of ours, and is a stable thing you can text someone.
+
+The tenant slug goes in the metadata of the link and of the subscription it
+creates. That is the entire join: Stripe makes the customer at checkout, so
+there is nothing to match on until the subscription exists and carries the slug
+itself.
+
+Replacing a link deactivates the old one. Two live links for one client means
+two subscriptions if both get used, which is a refund conversation rather than
+a tidiness problem.
+
+### Mode
+
+Read from the key — `sk_test_` or `sk_live_` — never a separate setting,
+because a flag that can disagree with the key is a way to believe you are
+testing while charging a real card. Every billing screen says which mode it is
+in, and a link made in the other mode is flagged as dead rather than quietly
+failing when a client tries to pay it.
+
+### What is deliberately not built
+
+Changing a card, downloading a receipt, issuing a refund. All of it goes to
+Stripe's own customer portal through **Manage card in Stripe**. Every version
+of those features means handling card details, and there is no version of that
+worth owning.
 ## Source layout
 
 ```

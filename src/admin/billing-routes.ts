@@ -3,44 +3,28 @@ import { agenciesEnabled, mayAccess, type Agency } from "../tenancy/agency";
 import {
   accountFor,
   billingEnabled,
-  dueNow,
-  invoiceClient,
-  invoicesFor,
-  listPlans,
-  markPaid,
-  pushToProvider,
-  reconcile,
+  clientBilling,
   saveAccount,
-  sendInvoice,
-  slugForInvoice,
-  slugForSubscription,
-  subscribe,
+  startBilling,
   summary,
-  updateSubscription,
-  voidInvoice,
 } from "../billing/store";
-import { ping, stripeEnabled, stripeMode } from "../billing/stripe";
+import {
+  billingPortalUrl,
+  cancelSubscription,
+  ping,
+  resumeSubscription,
+  seedCatalog,
+  stripeEnabled,
+  stripeMode,
+  subscriptionFor,
+} from "../billing/stripe";
 
 /**
  * Billing routes.
  *
- * Split from the main admin router because billing is the one area where a
- * mistake costs money rather than a re-run, and keeping it in its own file
- * makes "what can touch an invoice" a question with a short answer.
- *
- * Mounted inside the authenticated admin API, so every request here has
- * already been through sign-in and the agency guard.
+ * Small, because Stripe does the work. Putting a client on a plan is one call
+ * that returns a link; everything else reads what Stripe already knows.
  */
-
-/** Dollars from a form to integer cents, refusing anything that is not money. */
-function cents(value: unknown, field: string): number {
-  const n = typeof value === "number" ? value : Number(String(value ?? "").replace(/[$,\s]/g, ""));
-  if (!Number.isFinite(n) || n < 0) throw new Error(`${field} must be an amount, like 800 or 800.00.`);
-  // Rounded rather than truncated: 8.005 entered from a spreadsheet should be
-  // 801 cents, not 800. Off-by-one-cent errors in an invoice erode trust in
-  // every other number on it.
-  return Math.round(n * 100);
-}
 
 interface AgencyRequest extends Request {
   agency?: Agency | null;
@@ -49,15 +33,11 @@ interface AgencyRequest extends Request {
 export function billingRoutes(visibleSlugs: (req: Request) => Promise<string[]>): Router {
   const router = express.Router();
 
-  // One guard for the whole surface. Every route below needs the database, and
-  // failing once with a clear message beats five different errors.
-  router.use((_req: Request, res: Response, next) => {
+  router.use((_req: Request, res: Response, next: NextFunction) => {
     if (!billingEnabled()) {
       res.status(503).json({
         error: "billing_unavailable",
-        message:
-          "Billing needs Supabase. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in .env, " +
-          "then apply the billing migration.",
+        message: "Billing needs Supabase. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in .env.",
       });
       return;
     }
@@ -66,13 +46,10 @@ export function billingRoutes(visibleSlugs: (req: Request) => Promise<string[]>)
 
   /**
    * The agency guard again, because the one in the main router is bound to
-   * "/clients/:slug" and these routes live at "/billing/clients/:slug" — a
-   * different path, so it never fires here.
+   * "/clients/:slug" and never fires on "/billing/clients/:slug".
    *
-   * Writing it out a second time is worse than reusing it, and reusing it is
-   * not possible without restructuring the mount. Of the two, a duplicated
-   * guard is the mistake that fails safe; the missing one hands another
-   * agency's invoices to whoever guesses a slug.
+   * A duplicated guard is the mistake that fails safe. The missing one hands
+   * another agency's revenue to whoever guesses a slug.
    */
   router.use("/clients/:slug", (req: AgencyRequest, res: Response, next: NextFunction) => {
     void (async () => {
@@ -89,146 +66,87 @@ export function billingRoutes(visibleSlugs: (req: Request) => Promise<string[]>)
     })();
   });
 
-  /**
-   * The same check, for routes that address a row by id rather than by slug.
-   *
-   * A UUID is not an access control. It is a bet that one never reaches the
-   * wrong window — and these rows are invoices, so the bet is not worth taking
-   * when the lookup costs one query.
-   */
-  const ownsRow = async (
-    req: AgencyRequest,
-    res: Response,
-    lookup: (id: string) => Promise<string | null>
-  ): Promise<boolean> => {
-    if (!agenciesEnabled()) return true;
-    const slug = await lookup(req.params.id);
-    if (slug && (await mayAccess(req.agency?.id ?? null, slug))) return true;
-    res.status(404).json({ error: "not_found" });
-    return false;
-  };
-
-  /** The billing page: every client, what they pay, what is outstanding. */
+  /** Everyone, and what Stripe says about them. */
   router.get("/", async (req: Request, res: Response) => {
     try {
-      const slugs = await visibleSlugs(req);
-      // Reconcile before summarising, so an invoice paid in Stripe since the
-      // last visit is already marked paid in the numbers on screen rather than
-      // appearing as overdue until someone presses something.
-      let synced = null;
-      if (stripeEnabled()) {
-        try {
-          synced = await reconcile();
-        } catch (error) {
-          // A Stripe outage must not take the billing page down with it. The
-          // ledger is the record; Stripe is how the money arrives.
-          console.error(
-            `  Stripe reconcile failed: ${error instanceof Error ? error.message : error}`
-          );
-        }
-      }
-
-      const [data, plans] = await Promise.all([summary(slugs), listPlans()]);
-      res.json({
-        ...data,
-        plans,
-        due: await dueNow(slugs),
-        stripe: { enabled: stripeEnabled(), mode: stripeMode() },
-        synced,
-      });
+      res.json(await summary(await visibleSlugs(req)));
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
     }
   });
 
-  /** One client's billing: account, subscription, invoice history. */
+  /** One client. Read live, so a payment made a minute ago is already here. */
   router.get("/clients/:slug", async (req: Request, res: Response) => {
     try {
-      // Reconcile this client before reading them back. This is the page you
-      // are on immediately after raising and paying an invoice, so it is the
-      // page where a payment landing matters most — leaving it to the summary
-      // page meant navigating elsewhere to find out that money had arrived.
-      let synced = null;
-      if (stripeEnabled()) {
-        try {
-          synced = await reconcile(req.params.slug);
-        } catch (error) {
-          console.error(
-            `  Stripe reconcile failed for ${req.params.slug}: ${
-              error instanceof Error ? error.message : error
-            }`
-          );
-        }
-      }
-
-      const [found, invoices, plans] = await Promise.all([
-        accountFor(req.params.slug),
-        invoicesFor(req.params.slug),
-        listPlans(),
-      ]);
       res.json({
-        account: found?.account ?? null,
-        subscription: found?.subscription ?? null,
-        invoices,
-        plans,
+        ...(await clientBilling(req.params.slug)),
         stripe: { enabled: stripeEnabled(), mode: stripeMode() },
-        synced,
       });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
     }
   });
 
-  router.put("/clients/:slug/account", async (req: Request, res: Response) => {
+  /**
+   * Put a client on a plan.
+   *
+   * The whole flow in one call: creates the payment link and returns it. The
+   * client pays once and Stripe bills them monthly from then on.
+   */
+  router.post("/clients/:slug/start", async (req: Request, res: Response) => {
     try {
-      const account = await saveAccount(req.params.slug, {
-        companyName: String(req.body?.companyName ?? ""),
-        contactName: String(req.body?.contactName ?? ""),
-        contactEmail: String(req.body?.contactEmail ?? ""),
-        notes: String(req.body?.notes ?? ""),
+      const { priceId, setupPriceId, contactEmail } = req.body ?? {};
+      if (!priceId) throw new Error("Pick a plan.");
+
+      const account = await startBilling({
+        slug: req.params.slug,
+        priceId: String(priceId),
+        setupPriceId: setupPriceId ? String(setupPriceId) : null,
+        contactEmail: contactEmail ? String(contactEmail) : undefined,
       });
+
       res.json({ account });
     } catch (error) {
       res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
     }
   });
 
-  router.post("/clients/:slug/subscription", async (req: Request, res: Response) => {
+  router.put("/clients/:slug/account", async (req: Request, res: Response) => {
     try {
-      const { planId, monthly, setup, interval, startedOn } = req.body ?? {};
-      if (!planId) throw new Error("Pick a plan.");
-
-      // Blank means "use the plan's price". Zero is a real answer and must not
-      // be swallowed by a falsy check — a free client is a decision someone
-      // made, and it should survive being typed.
-      const override =
-        monthly === "" || monthly === null || monthly === undefined
-          ? null
-          : cents(monthly, "Monthly");
-
-      const subscription = await subscribe(req.params.slug, {
-        planId: String(planId),
-        monthlyCents: override,
-        setupCents: setup === "" || setup === undefined ? undefined : cents(setup, "Setup"),
-        interval: interval === "annual" ? "annual" : "monthly",
-        startedOn: startedOn ? String(startedOn) : undefined,
+      res.json({
+        account: await saveAccount(req.params.slug, {
+          contactEmail: String(req.body?.contactEmail ?? ""),
+          notes: String(req.body?.notes ?? ""),
+        }),
       });
-
-      res.json({ subscription });
     } catch (error) {
       res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
     }
   });
 
-  router.patch("/subscriptions/:id", async (req: AgencyRequest, res: Response) => {
+  /**
+   * Cancel at the end of the paid period.
+   *
+   * Never immediately: they have paid for this month and should get it.
+   * Cancelling mid-period is a refund conversation, which belongs in the Stripe
+   * dashboard where a refund can actually be issued.
+   */
+  router.post("/clients/:slug/cancel", async (req: Request, res: Response) => {
     try {
-      if (!(await ownsRow(req, res, slugForSubscription))) return;
-      const { status, monthly } = req.body ?? {};
-      await updateSubscription(req.params.id, {
-        status,
-        monthlyCents:
-          monthly === undefined ? undefined : monthly === "" ? null : cents(monthly, "Monthly"),
-      });
+      const sub = await subscriptionFor(req.params.slug);
+      if (!sub) throw new Error("No subscription to cancel.");
+      await cancelSubscription(sub.id, false);
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  router.post("/clients/:slug/resume", async (req: Request, res: Response) => {
+    try {
+      const sub = await subscriptionFor(req.params.slug);
+      if (!sub) throw new Error("No subscription to resume.");
+      await resumeSubscription(sub.id);
       res.json({ ok: true });
     } catch (error) {
       res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
@@ -236,117 +154,33 @@ export function billingRoutes(visibleSlugs: (req: Request) => Promise<string[]>)
   });
 
   /**
-   * Raise this client's next invoice.
+   * A link into Stripe's own portal, for changing the card or fetching
+   * receipts.
    *
-   * Returns `{invoice: null}` rather than an error when nothing is due. Billing
-   * the same period twice is the failure that matters here, and a route that
-   * quietly does nothing is the right shape for a button someone may press
-   * twice.
+   * Not rebuilt here. Every version of that feature means handling card
+   * details, and there is no version of that worth owning.
    */
-  router.post("/clients/:slug/invoice", async (req: Request, res: Response) => {
+  router.post("/clients/:slug/portal", async (req: Request, res: Response) => {
     try {
-      const invoice = await invoiceClient(req.params.slug, {
-        dueDays: Number(req.body?.dueDays ?? 14),
-      });
-      res.json({ invoice });
+      const account = await accountFor(req.params.slug);
+      if (!account?.stripeCustomerId) throw new Error("No Stripe customer yet — nobody has paid.");
+
+      const back = `${req.protocol}://${req.get("host")}/`;
+      res.json({ url: await billingPortalUrl(account.stripeCustomerId, back) });
     } catch (error) {
       res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
     }
   });
 
-  /**
-   * Bill everyone who is due.
-   *
-   * Each client is invoiced independently and a failure is reported rather than
-   * thrown: one client with a broken subscription must not stop the other
-   * forty-nine from being billed this month.
-   */
-  router.post("/run", async (req: Request, res: Response) => {
+  /** Create the starting products in Stripe, so nobody has to learn its UI. */
+  router.post("/catalog", async (_req: Request, res: Response) => {
     try {
-      const slugs = await dueNow(await visibleSlugs(req));
-      const issued: { slug: string; number: string; totalCents: number }[] = [];
-      const failed: { slug: string; error: string }[] = [];
-
-      for (const slug of slugs) {
-        try {
-          const invoice = await invoiceClient(slug, { dueDays: Number(req.body?.dueDays ?? 14) });
-          if (invoice) {
-            issued.push({ slug, number: invoice.number, totalCents: invoice.totalCents });
-          }
-        } catch (error) {
-          failed.push({ slug, error: error instanceof Error ? error.message : String(error) });
-        }
-      }
-
-      res.json({ issued, failed });
-    } catch (error) {
-      res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
-    }
-  });
-
-  router.post("/invoices/:id/paid", async (req: AgencyRequest, res: Response) => {
-    try {
-      if (!(await ownsRow(req, res, slugForInvoice))) return;
-      await markPaid(req.params.id, String(req.body?.method ?? ""));
-      res.json({ ok: true });
+      res.json(await seedCatalog());
     } catch (error) {
       res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
     }
   });
 
-  router.post("/invoices/:id/void", async (req: AgencyRequest, res: Response) => {
-    try {
-      if (!(await ownsRow(req, res, slugForInvoice))) return;
-      await voidInvoice(req.params.id);
-      res.json({ ok: true });
-    } catch (error) {
-      res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
-    }
-  });
-
-  /** Ask Stripe about every open invoice and mark the paid ones paid. */
-  router.post("/reconcile", async (req: Request, res: Response) => {
-    try {
-      if (!stripeEnabled()) throw new Error("Stripe is not configured.");
-      const slug = typeof req.body?.slug === "string" ? req.body.slug : undefined;
-      res.json(await reconcile(slug));
-    } catch (error) {
-      res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
-    }
-  });
-
-  /**
-   * Push an invoice to Stripe that is not there yet.
-   *
-   * A retry, for the case where the invoice was raised while Stripe was
-   * unreachable or unconfigured. Never re-bills the period — that already
-   * happened locally.
-   */
-  router.post("/invoices/:id/push", async (req: AgencyRequest, res: Response) => {
-    try {
-      if (!(await ownsRow(req, res, slugForInvoice))) return;
-
-      const slug = await slugForInvoice(req.params.id);
-      const invoice = (await invoicesFor(slug!)).find((i) => i.id === req.params.id);
-      if (!invoice) throw new Error("No such invoice.");
-
-      res.json({ invoice: await pushToProvider(invoice) });
-    } catch (error) {
-      res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
-    }
-  });
-
-  /** Email the invoice through Stripe. */
-  router.post("/invoices/:id/send", async (req: AgencyRequest, res: Response) => {
-    try {
-      if (!(await ownsRow(req, res, slugForInvoice))) return;
-      res.json({ url: await sendInvoice(req.params.id) });
-    } catch (error) {
-      res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
-    }
-  });
-
-  /** Does the key work, and which mode is it. For the status page. */
   router.get("/stripe", async (_req: Request, res: Response) => {
     res.json({ enabled: stripeEnabled(), mode: stripeMode(), ...(await ping()) });
   });
