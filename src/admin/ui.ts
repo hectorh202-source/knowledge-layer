@@ -283,6 +283,11 @@ function overviewView(){
         : t.complete ? '<div class="banner ok"><strong>Tier 1 complete.</strong> Ready for Tier 2.</div>' : "")+
     (s.blockingCount>0? '<div class="banner bad"><strong>'+s.blockingCount+' blocking gap'+(s.blockingCount===1?"":"s")+
       ' in the business profile.</strong> The API serves no business record and the catalog will not publish until these are filled.</div>':"")+
+    ((detail.pendingIntake&&detail.pendingIntake.total>0)
+      ? '<div class="banner warn"><strong>'+detail.pendingIntake.total+' extracted candidate'+
+        (detail.pendingIntake.total===1?"":"s")+' not yet promoted.</strong> They stay out of the sections until you do. '+
+        '<button class="btn" data-goto="sources" style="margin-left:.4rem">Go to Sources</button></div>'
+      : "")+
     (pending>0? '<div class="banner warn"><strong>'+pending+' item'+(pending===1?"":"s")+' awaiting approval.</strong> Nothing extracted reaches an answer engine until someone confirms it.</div>':"")+
     (detail.expiredCredentials>0? '<div class="banner bad"><strong>'+detail.expiredCredentials+' expired credential(s) approved.</strong> Never served, but worth removing.</div>':"")+
     '<div class="grid">'+stat(s.itemCount,"Items")+stat(s.approvedCount,"Approved")+stat(s.publishedCount,"Live")+
@@ -336,15 +341,28 @@ async function discoverabilityView(){
 }
 
 function sourcesView(){
+  const p = detail.pendingIntake || {total:0};
+  const parts = Object.entries(p).filter(([k,v])=>k!=="total"&&v>0)
+    .map(([k,v])=>v+" "+(LABELS[k]||k).toLowerCase());
+
   return '<h1>Sources</h1><div class="sub">Google first, then the website, then you. Everything extracted arrives unapproved.</div>'+
-  '<div class="card"><div class="card-h"><h2>Google Places</h2><span class="meta">no customer authorization needed</span></div>'+
+  (p.total>0
+    ? '<div class="banner warn"><strong>'+p.total+' candidate'+(p.total===1?"":"s")+' waiting to be promoted'+
+      (parts.length?' — '+esc(parts.join(", ")):"")+'.</strong> A crawl only writes candidates; '+
+      'until you promote them the sections stay empty. '+
+      '<button class="btn primary" data-run="promote" style="margin-left:.4rem">Promote now</button></div>'
+    : "")+
+  '<div class="card"><div class="card-h"><h2>1 &nbsp;Google Places</h2><span class="meta">no customer authorization needed</span></div>'+
     '<div class="card-b"><div class="sub" style="margin:0 0 .7rem">Hours, address and phone from public Google data using your own API key. Google permits storing place_id only, so treat the rest as a suggestion the owner confirms.</div>'+
     '<button class="btn primary" data-run="places">Pull from Google</button></div></div>'+
-  '<div class="card"><div class="card-h"><h2>Website</h2></div><div class="card-b">'+
+  '<div class="card"><div class="card-h"><h2>2 &nbsp;Website</h2></div><div class="card-b">'+
     '<div class="sub" style="margin:0 0 .7rem">Crawls the domain, respecting robots.txt. Prefers structured data the site already publishes.</div>'+
     '<button class="btn primary" data-run="website">Crawl website</button></div></div>'+
-  '<div class="card"><div class="card-h"><h2>Merge into content</h2></div><div class="card-b">'+
-    '<div class="sub" style="margin:0 0 .7rem">Combines every source. Never overwrites a value a person entered — conflicts are reported instead.</div>'+
+  '<div class="card"><div class="card-h"><h2>3 &nbsp;Promote into content</h2>'+
+    (p.total>0?'<span class="pill wait">'+p.total+' waiting</span>':"")+'</div><div class="card-b">'+
+    '<div class="sub" style="margin:0 0 .7rem"><strong>Required.</strong> Crawling only writes candidates to an intake file — '+
+    'this is the step that puts them into Services, Q&amp;A and the rest. Combines every source, and never '+
+    'overwrites a value a person entered; conflicts are reported instead.</div>'+
     '<button class="btn primary" data-run="promote">Promote candidates</button></div></div>'+
   '<div class="card"><div class="card-h"><h2>Output</h2></div><pre id="runOut">Run a source to see its output.</pre></div>';
 }
@@ -545,7 +563,11 @@ document.addEventListener("click", async e => {
       const r = await api("/clients/"+current+map[t.dataset.run],{method:"POST",body:JSON.stringify({})});
       out.textContent = r.output; t.disabled=false;
       await refresh(); render(); $("runOut").textContent = r.output;
-      toast(r.ok?"Finished.":"Finished with errors — see output."); return;
+      if(t.dataset.run!=="promote" && detail.pendingIntake && detail.pendingIntake.total>0){
+        toast(detail.pendingIntake.total+" candidates found — press Promote to add them.", 6000);
+      } else {
+        toast(r.ok?"Finished.":"Finished with errors — see output.");
+      } return;
     }
 
     if(t.dataset.db){

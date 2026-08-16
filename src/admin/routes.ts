@@ -86,6 +86,76 @@ function summarize(slug: string): TenantSummary | null {
   };
 }
 
+/**
+ * Candidates sitting in intake files that aren't in the content files yet.
+ *
+ * Crawling writes candidates; promoting moves them into the sections. Without
+ * this count the two steps look identical from the outside — a crawl that
+ * found 33 services leaves every section reading zero, and nothing on screen
+ * says why.
+ */
+function countPendingIntake(slug: string): Record<string, number> & { total: number } {
+  const dir = intakeDir(slug);
+  const pending: Record<string, number> & { total: number } = { total: 0 };
+  if (!fs.existsSync(dir)) return pending;
+
+  const key = (value: string) => value.toLowerCase().replace(/\s+/g, " ").trim();
+
+  const existing: Record<string, Set<string>> = {
+    services: new Set(loadByKind(slug, "services").map((item) => key(String(item.name ?? "")))),
+    "service-areas": new Set(
+      loadByKind(slug, "service-areas").map((item) => key(String(item.name ?? "")))
+    ),
+    brands: new Set(loadByKind(slug, "brands").map((item) => key(String(item.name ?? "")))),
+    faqs: new Set(loadByKind(slug, "faqs").map((item) => key(String(item.question ?? "")))),
+    credentials: new Set(
+      loadByKind(slug, "credentials").map((item) =>
+        key(String(item.identifier ?? item.title ?? ""))
+      )
+    ),
+  };
+
+  // Deduped across sources, so two intake runs finding the same service count
+  // once — the same thing promote would write.
+  const fresh: Record<string, Set<string>> = {
+    services: new Set(),
+    "service-areas": new Set(),
+    brands: new Set(),
+    faqs: new Set(),
+    credentials: new Set(),
+  };
+
+  for (const file of fs.readdirSync(dir).filter((name) => name.endsWith(".json"))) {
+    let result: Record<string, unknown>;
+    try {
+      result = JSON.parse(fs.readFileSync(path.join(dir, file), "utf8"));
+    } catch {
+      continue;
+    }
+
+    const collect = (items: unknown, kind: string, field: string) => {
+      if (!Array.isArray(items)) return;
+      for (const raw of items) {
+        const value = key(String((raw as Record<string, unknown>)?.[field] ?? ""));
+        if (value && !existing[kind].has(value)) fresh[kind].add(value);
+      }
+    };
+
+    collect(result.services, "services", "name");
+    collect(result.areas, "service-areas", "name");
+    collect(result.brands, "brands", "name");
+    collect(result.faqs, "faqs", "question");
+    collect(result.credentials, "credentials", "title");
+  }
+
+  for (const [kind, set] of Object.entries(fresh)) {
+    pending[kind] = set.size;
+    pending.total += set.size;
+  }
+
+  return pending;
+}
+
 /** Runs one of the CLI tools and streams back its output. */
 function runScript(
   script: string,
@@ -190,6 +260,7 @@ export function createAdminRouter(): Router {
       openDays: profile ? profile.hours.filter((entry) => !entry.isClosed).length : 0,
       sections,
       expiredCredentials: expired,
+      pendingIntake: countPendingIntake(slug),
     });
   });
 
