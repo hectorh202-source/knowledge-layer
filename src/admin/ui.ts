@@ -97,21 +97,25 @@ tr:last-child td{border-bottom:0}
 /* Every button is the accent colour. The primary class is kept as a no-op so
    existing markup still reads correctly and nothing had to be rewritten.
    No backticks in here: this stylesheet lives inside a template literal. */
-button.btn{font:inherit;font-size:.83rem;padding:.4rem .75rem;border-radius:7px;
-  border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer}
-button.btn:hover{filter:brightness(1.1)}
-button.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+/* Both elements, because some actions are navigations. An anchor styled as a
+   button keeps middle-click and open-in-new-tab working, which a button with a
+   click handler quietly takes away. */
+.btn{font:inherit;font-size:.83rem;padding:.4rem .75rem;border-radius:7px;
+  border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer;
+  display:inline-block;text-decoration:none;line-height:1.4}
+.btn:hover{filter:brightness(1.1);color:#fff}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
 /* Dismissals. A Cancel that looks identical to Confirm makes a dialog a
    coin toss, so it drops back to an outline — present and clickable, but not
    competing with the action the dialog exists to perform. */
-button.btn.quiet{background:var(--panel);border-color:var(--line);color:var(--ink)}
-button.btn.quiet:hover{border-color:var(--accent);filter:none}
+.btn.quiet{background:var(--panel);border-color:var(--line);color:var(--ink)}
+.btn.quiet:hover{border-color:var(--accent);filter:none}
 /* Destructive actions stay outlined and red. With everything else solid blue,
    a quiet red button is both unmistakable and — correctly — less inviting to
    press than the action you actually came to perform. */
-button.btn.danger{background:var(--panel);border-color:var(--line);color:var(--bad)}
-button.btn.danger:hover{border-color:var(--bad);filter:none}
-button.btn:disabled{opacity:.5;cursor:not-allowed;filter:none}
+.btn.danger{background:var(--panel);border-color:var(--line);color:var(--bad)}
+.btn.danger:hover{border-color:var(--bad);filter:none}
+.btn:disabled{opacity:.5;cursor:not-allowed;filter:none}
 .row{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center}
 input,select,textarea{font:inherit;font-size:.87rem;padding:.42rem .55rem;border-radius:7px;
   border:1px solid var(--line);background:var(--bg);color:var(--ink);width:100%}
@@ -683,6 +687,13 @@ function publishingView(){
     '<a href="https://validator.schema.org/" target="_blank" rel="noopener">Schema Markup Validator &#8599;</a> or '+
     '<a href="https://search.google.com/test/rich-results" target="_blank" rel="noopener">Rich Results Test &#8599;</a>. Both accept the copied snippet.</div>'+
     '</div></div>'+
+
+  '<div class="card"><div class="card-h"><h2>Client report</h2>'+
+    '<a class="btn" href="/admin/api/clients/'+encodeURIComponent(current)+'/report" target="_blank" rel="noopener" style="text-decoration:none">Open report ↗</a></div>'+
+    '<div class="card-b"><div class="sub" style="margin:0">What the client sees for their money: what AI can find, whether their details agree across the web, '+
+    'what has been published, and what happens next. Written for the business owner rather than for you, and laid out to print straight to PDF. '+
+    'Every figure is measured &mdash; there is no visibility score, because inventing one would make the real numbers beside it untrustworthy.</div>'+
+  '</div></div>'+
 
   '<div class="card"><div class="card-h"><h2>Database</h2></div><div class="card-b">'+
     '<div class="sub" style="margin:0 0 .7rem">Pushes approved content to Supabase. Publishing the profile is a separate, deliberate act.</div>'+

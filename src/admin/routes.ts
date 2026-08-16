@@ -17,6 +17,8 @@ import { MANUAL_CHECKS, runTier1Audit } from "../audit/tier1";
 import { verifyMarkup } from "../audit/verify-markup";
 import { auditNap } from "../audit/nap";
 import { auditDirectories } from "../audit/directory-presence";
+import { buildReport } from "../report/build";
+import { renderReport } from "../report/render";
 import {
   CONTENT_KINDS,
   createTenant,
@@ -453,6 +455,20 @@ export function createAdminRouter(): Router {
     }
     const result = await runScript("src/intake/run-places.ts", args);
     res.json(result);
+  });
+
+  // Rendered HTML rather than JSON: this one is read by a person, printed to
+  // PDF and emailed. Served from the admin surface so it stays behind auth —
+  // it names gaps in a client's setup and is not for the open web.
+  router.get("/clients/:slug/report", async (req: Request, res: Response) => {
+    try {
+      const report = await buildReport(req.params.slug);
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.setHeader("Cache-Control", "no-store");
+      res.send(renderReport(report));
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    }
   });
 
   router.get("/clients/:slug/directories", (req: Request, res: Response) => {

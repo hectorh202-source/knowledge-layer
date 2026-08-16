@@ -138,6 +138,25 @@ authoritative. Replace, do not append.
 Re-run this whenever the profile changes. A pasted snippet is correct the day it
 is pasted and drifts silently from then on.
 
+## Send the client their report
+
+**Publishing → Client report → Open report.** A printable page written for the
+business owner rather than for you: what AI can currently find, whether their
+details agree across the web, what has been published, and what happens next —
+split by who does each thing.
+
+Run **Discoverability → Run checks** first. The report uses the stored audit and
+states its date, so an old result will honestly report a problem you have
+already fixed.
+
+It carries **no score or grade**. Every figure traces to something measured, and
+anything that could not be checked is marked unconfirmed rather than guessed.
+A fabricated visibility percentage is the easiest thing to put on a page like
+this and the fastest way to make the real numbers beside it untrustworthy.
+
+It lives behind the login. It names gaps in a client's setup, which is not
+material for the open web.
+
 ## Then run the audits
 
 **Discoverability** holds three, all worth running once the above is done:

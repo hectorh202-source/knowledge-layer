@@ -119,6 +119,7 @@ Mounted at `/admin/api`. Requires a session.
 | `POST` `PATCH` `DELETE` | `/clients/:slug/content/:kind[/:index]` |
 | `POST` | `/clients/:slug/content/:kind/bulk` |
 | `POST` | `/clients/:slug/generate/faqs` |
+| `GET` | `/clients/:slug/report` | rendered HTML, for the client |
 | `GET` | `/clients/:slug/jsonld` |
 | `GET` | `/clients/:slug/nap` |
 | `GET` | `/clients/:slug/directories` |
