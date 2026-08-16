@@ -301,6 +301,83 @@ export function extractHubLinks(
   return [...found.values()];
 }
 
+/**
+ * Plain-text lists on a page someone pointed us at.
+ *
+ * Service lists are very often not links at all — just a run of short sibling
+ * elements, one item each. On a real site this looked like:
+ *
+ *   <p>Storage Clean Outs</p>
+ *   <p>Appliance Removal</p>
+ *   <p>Furniture Removal</p>
+ *
+ * Link extraction finds nothing there, and no amount of URL pattern matching
+ * helps. What identifies these is structural repetition rather than markup
+ * type: several siblings of the same tag, each holding a short phrase with no
+ * link and no sentence punctuation. That works for <p>, <li>, <div>, or <span>
+ * runs equally.
+ */
+export function extractHubTextItems(
+  html: string,
+  /**
+   * Text runs that also appear on the homepage.
+   *
+   * Sitewide blocks — "Prompt Pickup / Friendly Service / Locally Owned" and
+   * the like — are structurally identical to a real list and get picked up as
+   * one. They appear on every page, so the homepage is the baseline that tells
+   * page content from site furniture, exactly as it does for links.
+   */
+  furniture: Set<string> = new Set(),
+  minRun = 4
+): string[] {
+  const $ = cheerio.load(html);
+  const items: string[] = [];
+  const seen = new Set<string>();
+
+  $("body")
+    .find("*")
+    .each((_, parent) => {
+      const children = $(parent).children();
+      if (children.length < minRun) return;
+
+      const run: string[] = [];
+      let tag: string | null = null;
+
+      children.each((_, child) => {
+        const $child = $(child);
+        const childTag = ($child.prop("tagName") ?? "").toLowerCase();
+        const text = $child.text().replace(/\s+/g, " ").trim();
+
+        const looksLikeItem =
+          text.length >= 3 &&
+          text.length <= 50 &&
+          // An item is a label, not a sentence.
+          !/[.!?;:]$/.test(text) &&
+          // Links are handled separately; a linked run is a nav block.
+          $child.find("a").length === 0 &&
+          $child.children().length === 0 &&
+          // Digits mean a phone number, price, or address.
+          !/\d/.test(text);
+
+        if (looksLikeItem && (tag === null || tag === childTag)) {
+          tag = childTag;
+          run.push(text);
+        }
+      });
+
+      if (run.length >= minRun) {
+        for (const text of run) {
+          const key = text.toLowerCase();
+          if (seen.has(key) || furniture.has(key)) continue;
+          seen.add(key);
+          items.push(text);
+        }
+      }
+    });
+
+  return items;
+}
+
 /** Absolute, normalized hrefs on a page — used as the furniture baseline. */
 export function pageHrefs(html: string, url: string): Set<string> {
   const $ = cheerio.load(html);

@@ -11,6 +11,7 @@ import {
   extractCredentials,
   extractFaqs,
   extractHubLinks,
+  extractHubTextItems,
   extractMeta,
   extractServices,
   pageHrefs,
@@ -207,6 +208,11 @@ export async function crawlSite(options: CrawlOptions): Promise<IntakeResult> {
   // --- pages we were pointed at --------------------------------------------
   // Read last, so the homepage is available as the site-furniture baseline.
   const furniture = homepageHtml ? pageHrefs(homepageHtml, origin) : new Set<string>();
+  const textFurniture = new Set(
+    homepageHtml
+      ? extractHubTextItems(homepageHtml).map((text) => text.toLowerCase())
+      : []
+  );
 
   for (const hub of [
     { url: options.servicesPageUrl, kind: "services" as const },
@@ -234,12 +240,22 @@ export async function crawlSite(options: CrawlOptions): Promise<IntakeResult> {
     }
 
     result.pagesFetched.push(hub.url);
-    const links = extractHubLinks(page.html, hub.url, furniture, hub.kind);
+
+    // Links first, then plain-text runs — a list is often one or the other,
+    // occasionally both.
+    const names = [
+      ...extractHubLinks(page.html, hub.url, furniture, hub.kind).map((link) => link.name),
+      ...extractHubTextItems(page.html, textFurniture),
+    ];
+
+    const links = [...new Set(names.map((name) => name.trim()))]
+      .filter(Boolean)
+      .map((name) => ({ name, href: hub.url! }));
 
     if (links.length === 0) {
       result.notes.push(
-        `The configured ${hub.kind} page had no links unique to it. Either it lists items as ` +
-          `plain text rather than links, or the URL points at a nav page.`
+        `Nothing extractable on the configured ${hub.kind} page — no links unique to it and no ` +
+          `repeated short text items. Check the URL points at the list itself.`
       );
       continue;
     }
