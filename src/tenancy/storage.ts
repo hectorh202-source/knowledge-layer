@@ -252,7 +252,22 @@ export class SupabaseStorage implements Storage {
     return (await this.tenantId(slug)) !== null;
   }
 
+  /**
+   * Idempotent, deliberately.
+   *
+   * A tenants row can already exist without the client being set up here at
+   * all: `content:load` creates one to hang published content off. A plain
+   * insert 409s on exactly those clients — the ones that most need the rest of
+   * their data created.
+   *
+   * Check-then-insert rather than an upsert, because an upsert would write
+   * `name: slug` over a real business name. The race it leaves is a 409 on
+   * simultaneous creation of the same slug, which is the correct outcome.
+   */
   async createTenant(slug: string): Promise<void> {
+    const existing = await this.tenantId(slug);
+    if (existing) return;
+
     const rows = (await this.rest(`tenants`, {
       method: "POST",
       body: JSON.stringify({ slug, name: slug }),
