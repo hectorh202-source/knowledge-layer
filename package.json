@@ -16,10 +16,10 @@
     "jsonld": "tsx src/jsonld/run.ts",
     "portal": "tsx src/admin/server.ts",
     "vocabulary:build": "tsx scripts/build-vocabulary.ts",
-    "generate:brand-faqs": "tsx src/content/generate-brand-faqs.ts",
     "verify:markup": "tsx src/audit/verify-markup.ts",
     "audit:nap": "tsx src/audit/nap.ts",
-    "audit:directories": "tsx src/audit/directory-presence.ts"
+    "audit:directories": "tsx src/audit/directory-presence.ts",
+    "generate:faqs": "tsx src/content/generate-faqs.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",

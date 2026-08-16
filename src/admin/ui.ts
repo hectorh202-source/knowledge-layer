@@ -243,28 +243,29 @@ function contentView(kind){
     '<div class="card"><div class="card-h"><h2>Add by hand</h2></div><div class="card-b">'+
       '<div class="cols2">'+fields+'</div>'+
       '<button class="btn primary" id="addItem">Add</button></div></div>'+
-    (kind==="brands" ? brandFaqCard(sec) : "");
+    (kind==="faqs" ? faqGeneratorCard() : "");
 }
 
 /**
- * Turning brands into readable answers.
+ * Assembling answers from approved facts.
  *
- * On the Brands page rather than Q&A because that is where someone is looking
- * at the list and can see what it will produce.
+ * On the Q&A page rather than beside each source list. This was originally a
+ * brand-only card on the Brands page, which meant it sat there telling every
+ * non-HVAC client to "approve at least one brand first" — permanently useless
+ * to a hauler or a locksmith. Brands are one input among several, so the card
+ * belongs where the output lands.
  */
-function brandFaqCard(sec){
-  const approved = sec.approved;
-  return '<div class="card"><div class="card-h"><h2>Generate FAQs from these brands</h2>'+
-    '<span class="meta">'+approved+' approved brand'+(approved===1?"":"s")+'</span></div><div class="card-b">'+
-    '<div class="sub" style="margin:0 0 .7rem">A brand on its own publishes as <code>knowsAbout</code> &mdash; a bare name with no stated relationship, which Google '+
-    'ignores for rich results and an assistant can do little with. &ldquo;Do you service Trane?&rdquo; with a real answer is the format answer engines quote most directly.</div>'+
-    '<div class="sub" style="margin:0 0 .7rem">Uses <strong>approved brands only</strong>, and writes answers from facts already held &mdash; business name, approved service areas, phone. '+
-    'Nothing about pricing, response times or whether they install as well as repair, because none of that is known here.</div>'+
-    (approved===0
-      ? '<div class="empty">Approve at least one brand first.</div>'
-      : '<div class="row"><button class="btn" data-gen="brand-faqs-dry">Preview</button>'+
-        '<button class="btn primary" data-gen="brand-faqs">Generate</button></div>'+
-        '<pre id="genOut" style="margin-top:.7rem">Nothing generated yet.</pre>')+
+function faqGeneratorCard(){
+  return '<div class="card"><div class="card-h"><h2>Generate from approved facts</h2>'+
+    '<div class="row"><button class="btn" data-gen="dry">Preview</button>'+
+    '<button class="btn primary" data-gen="run">Generate</button></div></div><div class="card-b">'+
+    '<div class="sub" style="margin:0 0 .7rem">Turns service areas, hours, credentials and brands into questions. Those facts are already in the app, '+
+    'structured and approved &mdash; but structured data is not what gets quoted. A sentence is.</div>'+
+    '<div class="sub" style="margin:0 0 .7rem">Uses <strong>approved items only</strong> and writes nothing that is not already known. No pricing, no response times, '+
+    'no claims about being the best &mdash; a plausible invented detail is the worst possible output, because it survives review by reading well.</div>'+
+    '<div class="sub" style="margin:0 0 .7rem">One question per service area, because &ldquo;do you serve Venice&rdquo; is a real search. '+
+    '<strong>Not one per service</strong> &mdash; thirty-four near-identical entries is filler, and filler reads as spam and gives an engine nothing to quote. Services get one roll-up.</div>'+
+    '<pre id="genOut">Nothing generated yet.</pre>'+
     '</div></div>';
 }
 
@@ -800,14 +801,14 @@ document.addEventListener("click", async e => {
     }
 
     if(t.dataset.gen){
-      const dry = t.dataset.gen.endsWith("-dry");
+      const dry = t.dataset.gen==="dry";
       const out=$("genOut"); out.textContent="Running…"; t.disabled=true;
-      const r = await api("/clients/"+current+"/generate/brand-faqs",
+      const r = await api("/clients/"+current+"/generate/faqs",
         {method:"POST",body:JSON.stringify({dryRun:dry})});
       t.disabled=false;
       await refresh(); render();
       if($("genOut")) $("genOut").textContent = r.output;
-      toast(dry ? "Preview only — nothing written." : "Generated. Review them in Q&A before approving.");
+      toast(dry ? "Preview only — nothing written." : "Generated. Read them before approving.");
       return;
     }
 

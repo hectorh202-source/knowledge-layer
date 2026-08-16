@@ -474,8 +474,8 @@ export function createAdminRouter(): Router {
     }
   });
 
-  router.post("/clients/:slug/generate/brand-faqs", async (req: Request, res: Response) => {
-    const result = await runScript("src/content/generate-brand-faqs.ts", [
+  router.post("/clients/:slug/generate/faqs", async (req: Request, res: Response) => {
+    const result = await runScript("src/content/generate-faqs.ts", [
       "--tenant",
       req.params.slug,
       ...(req.body?.dryRun === true ? ["--dry-run"] : []),
