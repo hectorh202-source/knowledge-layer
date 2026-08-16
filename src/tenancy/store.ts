@@ -84,6 +84,14 @@ export interface TenantSummary extends TenantSettings {
   publishedCount: number;
   hasProfile: boolean;
   blockingCount: number;
+  tier1?: {
+    ran: boolean;
+    passed: number;
+    failed: number;
+    manualDone: number;
+    manualTotal: number;
+    complete: boolean;
+  };
 }
 
 function slugify(value: string): string {

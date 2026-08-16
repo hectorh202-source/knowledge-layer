@@ -61,6 +61,13 @@ function summarize(slug: string): TenantSummary | null {
 
   const profile = loadProfile(slug);
 
+  // Tier 1 status, rolled up so the client list can show who is blocked
+  // without opening each one — the thing that matters at twenty clients
+  // rather than one.
+  const tier1 = readTier1(slug);
+  const report = tier1.report as { passed?: number; failed?: number } | null;
+  const manualDone = MANUAL_CHECKS.filter((check) => tier1.manual[check.id]?.checked).length;
+
   return {
     ...settings,
     itemCount,
@@ -68,6 +75,14 @@ function summarize(slug: string): TenantSummary | null {
     publishedCount,
     hasProfile: profile !== null,
     blockingCount: profile ? validateProfile(profile).blocking.length : 1,
+    tier1: {
+      ran: report !== null,
+      passed: report?.passed ?? 0,
+      failed: report?.failed ?? 0,
+      manualDone,
+      manualTotal: MANUAL_CHECKS.length,
+      complete: report !== null && (report.failed ?? 1) === 0 && manualDone === MANUAL_CHECKS.length,
+    },
   };
 }
 

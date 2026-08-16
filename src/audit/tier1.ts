@@ -258,10 +258,112 @@ export async function runTier1Audit(domain: string): Promise<Tier1Report> {
       : "A number inside an image or only in a form cannot be read or cited.",
   });
 
+  // --- does the site say what they do and where ---------------------------
+  // Read from the homepage's own links rather than by fetching more pages.
+  // Navigation is on the homepage on essentially every site, so this costs
+  // nothing extra and is more reliable than guessing at URL conventions.
+  const links = internalLinks(home.body, domain);
+
+  const servicePages = links.filter((href) =>
+    /\/(services?|plumbing|hvac|heating|cooling|air-conditioning|drain|sewer|water-heater|repair|installation|replacement)(\/|$)/i.test(
+      href
+    )
+  );
+
+  checks.push({
+    id: "services-page",
+    label: "A page stating services offered",
+    state: servicePages.length > 0 ? "pass" : "fail",
+    detail:
+      servicePages.length > 0
+        ? `${servicePages.length} service page${servicePages.length === 1 ? "" : "s"} linked from the homepage.`
+        : "No service pages linked from the homepage.",
+    fix:
+      servicePages.length > 0
+        ? null
+        : "An AI cannot say what this business does if the site never states it.",
+  });
+
+  const areaPages = links.filter((href) =>
+    /\/(coverage|service-areas?|areas?-we-serve|locations?|cities|neighborhoods?)(\/|$)/i.test(href)
+  );
+
+  checks.push({
+    id: "areas-page",
+    label: "A page stating service areas",
+    state: areaPages.length > 0 ? "pass" : "fail",
+    detail:
+      areaPages.length > 0
+        ? `${areaPages.length} area page${areaPages.length === 1 ? "" : "s"} linked from the homepage.`
+        : "No service area pages linked from the homepage.",
+    fix:
+      areaPages.length > 0
+        ? null
+        : "Name the cities or ZIPs served. 'And surrounding areas' cannot be matched to a searcher's location.",
+  });
+
+  // --- credentials ---------------------------------------------------------
+  // Check the homepage first, then the about page, since licence numbers
+  // usually live in a footer or on an about page rather than both.
+  const aboutPage = links.find((href) => /\/about/i.test(href));
+  let credentialText = home.body;
+
+  if (aboutPage && !hasCredentialClaim(credentialText)) {
+    await sleep(700);
+    const about = await get(aboutPage);
+    if (!("error" in about) && about.ok) credentialText += about.body;
+  }
+
+  const licenceNumber = credentialText.match(
+    /\b((?:CFC|CAC|EC|CGC|CBC|CCC)\s?\d{6,9})\b/i
+  );
+  const claimsLicensed = hasCredentialClaim(credentialText);
+
+  checks.push({
+    id: "credentials",
+    label: "Licensing and credentials stated",
+    state: licenceNumber ? "pass" : claimsLicensed ? "warn" : "fail",
+    detail: licenceNumber
+      ? `Found ${licenceNumber[1].trim()}${aboutPage ? " on the homepage or about page" : ""}.`
+      : claimsLicensed
+        ? "Says licensed or insured, but publishes no licence number."
+        : "No licensing claim or number found.",
+    fix: licenceNumber
+      ? null
+      : "A licence number is a specific, verifiable fact. 'Licensed and insured' is a claim every competitor also makes.",
+  });
+
   const passed = checks.filter((check) => check.state === "pass").length;
   const failed = checks.filter((check) => check.state === "fail").length;
 
   return { domain, ranAt: new Date().toISOString(), checks, passed, failed };
+}
+
+function hasCredentialClaim(html: string): boolean {
+  return /\b(licen[cs]ed|bonded|insured|certified)\b/i.test(html);
+}
+
+/** Same-site links from a page, absolute, deduped. */
+function internalLinks(html: string, domain: string): string[] {
+  const found = new Set<string>();
+  const bare = domain.replace(/^www\./, "").toLowerCase();
+
+  for (const match of html.matchAll(/href=["']([^"']+)["']/gi)) {
+    const raw = match[1].trim();
+    if (!raw || raw.startsWith("#") || /^(mailto|tel|javascript):/i.test(raw)) continue;
+
+    try {
+      const url = new URL(raw, `https://${domain}`);
+      if (url.hostname.replace(/^www\./, "").toLowerCase() !== bare) continue;
+      url.hash = "";
+      url.search = "";
+      found.add(url.toString());
+    } catch {
+      // Malformed href — skip rather than abort the audit.
+    }
+  }
+
+  return [...found];
 }
 
 /**

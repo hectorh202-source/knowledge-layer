@@ -183,7 +183,9 @@ function renderNav(){
   const nav = $("clientNav");
   let html = '<div class="navlabel">Clients</div>';
   for(const c of clients){
-    const ready = c.blockingCount===0;
+    // Red when the profile is incomplete OR discoverability is failing —
+    // both block being found, so both should show at a glance.
+    const ready = c.blockingCount===0 && !(c.tier1 && c.tier1.failed>0);
     html += '<button class="nav '+(current===c.slug&&view!=="status"&&view!=="clients"?"on":"")+'" data-client="'+esc(c.slug)+'">'+
       '<span class="client"><span class="dot '+(ready?"ready":"blocked")+'"></span>'+esc(c.name)+'</span>'+
       '<span class="badge">'+c.approvedCount+"/"+c.itemCount+'</span></button>';
@@ -199,6 +201,13 @@ function renderNav(){
     }
   }
   nav.innerHTML = html;
+}
+
+function tier1Pill(t){
+  if(!t || !t.ran) return '<span class="pill wait">not checked</span>';
+  if(t.complete) return '<span class="pill ok">complete</span>';
+  if(t.failed>0) return '<span class="pill bad">'+t.failed+' failing</span>';
+  return '<span class="pill wait">'+t.manualDone+'/'+t.manualTotal+' confirmed</span>';
 }
 
 function statusPill(it){
@@ -265,12 +274,20 @@ function overviewView(){
   const s = detail.summary, pending = s.itemCount - s.approvedCount;
   const stat=(n,l)=>'<div class="stat"><div class="n">'+n+'</div><div class="l">'+l+'</div></div>';
 
+  const t = s.tier1;
   return '<h1>'+esc(s.name)+'</h1><div class="sub">'+esc(s.domain||"no domain set")+'</div>'+
+    (!t || !t.ran
+      ? '<div class="banner warn"><strong>Discoverability not checked.</strong> Until it is, there is no evidence AI can reach this site at all. <button class="btn" data-goto="discoverability" style="margin-left:.4rem">Check now</button></div>'
+      : t.failed>0
+        ? '<div class="banner bad"><strong>'+t.failed+' discoverability check'+(t.failed===1?"":"s")+' failing.</strong> These block being found. <button class="btn" data-goto="discoverability" style="margin-left:.4rem">Review</button></div>'
+        : t.complete ? '<div class="banner ok"><strong>Tier 1 complete.</strong> Ready for Tier 2.</div>' : "")+
     (s.blockingCount>0? '<div class="banner bad"><strong>'+s.blockingCount+' blocking gap'+(s.blockingCount===1?"":"s")+
       ' in the business profile.</strong> The API serves no business record and the catalog will not publish until these are filled.</div>':"")+
     (pending>0? '<div class="banner warn"><strong>'+pending+' item'+(pending===1?"":"s")+' awaiting approval.</strong> Nothing extracted reaches an answer engine until someone confirms it.</div>':"")+
     (detail.expiredCredentials>0? '<div class="banner bad"><strong>'+detail.expiredCredentials+' expired credential(s) approved.</strong> Never served, but worth removing.</div>':"")+
     '<div class="grid">'+stat(s.itemCount,"Items")+stat(s.approvedCount,"Approved")+stat(s.publishedCount,"Live")+
+      stat(t&&t.ran ? t.passed+"/"+(t.passed+t.failed) : "—","Checks passing")+
+      stat(t ? t.manualDone+"/"+t.manualTotal : "—","Manual confirmed")+
       stat(detail.openDays+"/7","Open days")+'</div>'+
     '<div class="card" style="margin-top:1rem"><div class="card-h"><h2>Content</h2></div><table>'+
       detail.sections.map(sec=>'<tr><td class="primary">'+LABELS[sec.kind]+'</td>'+
@@ -410,9 +427,9 @@ async function statusView(){
 
 function clientsView(){
   return '<h1>Clients</h1><div class="sub">'+clients.length+' configured. Adding one creates its own isolated content set.</div>'+
-  '<div class="card">'+(clients.length?'<table><tr><th>Client</th><th>Domain</th><th>Items</th><th>Approved</th><th>Live</th><th></th></tr>'+
+  '<div class="card">'+(clients.length?'<table><tr><th>Client</th><th>Domain</th><th>Discoverability</th><th>Items</th><th>Approved</th><th>Live</th><th></th></tr>'+
     clients.map(c=>'<tr><td><span class="client"><span class="dot '+(c.blockingCount===0?"ready":"blocked")+'"></span><span class="primary">'+esc(c.name)+'</span></span></td>'+
-    '<td class="meta">'+esc(c.domain||"—")+'</td><td class="meta">'+c.itemCount+'</td><td class="meta">'+c.approvedCount+
+    '<td class="meta">'+esc(c.domain||"—")+'</td><td class="meta">'+tier1Pill(c.tier1)+'</td><td class="meta">'+c.itemCount+'</td><td class="meta">'+c.approvedCount+
     '</td><td class="meta">'+c.publishedCount+'</td><td class="meta"><button class="btn" data-open="'+esc(c.slug)+'">Open</button></td></tr>').join("")+
     '</table>':'<div class="empty">No clients yet. Add the first one from the sidebar.</div>')+'</div>';
 }
