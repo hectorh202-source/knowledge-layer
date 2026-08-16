@@ -477,6 +477,19 @@ export function createAdminRouter(): Router {
       sections,
       expiredCredentials: expired,
       pendingIntake: await countPendingIntake(slug),
+      // When each source last ran, and how much it found. Without it the
+      // Sources page cannot say whether the candidates behind it are from this
+      // morning or from March, and a stale crawl reads exactly like a fresh one.
+      intakeRuns: (await storage().listIntake(slug)).map((run) => ({
+        source: run.source,
+        ranAt: run.ranAt,
+        found:
+          (Array.isArray(run.result.services) ? run.result.services.length : 0) +
+          (Array.isArray(run.result.areas) ? run.result.areas.length : 0) +
+          (Array.isArray(run.result.brands) ? run.result.brands.length : 0) +
+          (Array.isArray(run.result.faqs) ? run.result.faqs.length : 0) +
+          (Array.isArray(run.result.credentials) ? run.result.credentials.length : 0),
+      })),
       // Included up front rather than behind a button. The audit is pure file
       // reads with no network call, so there is no cost to it, and which
       // directories get checked should not be something you have to click to
@@ -726,24 +739,11 @@ export function createAdminRouter(): Router {
     }
   });
 
-  /** Which sources have run, and when. */
-  router.get("/clients/:slug/sources", async (req: Request, res: Response) => {
-    const runs = (await storage().listIntake(req.params.slug)).map((run) => ({
-      file: run.source,
-      ranAt: run.ranAt,
-      // The candidate count, not the byte size. Bytes were an artefact of
-      // reading the file off disk and told nobody anything; "33 services found"
-      // is the thing someone is actually looking at this view to learn.
-      items:
-        (Array.isArray(run.result.services) ? run.result.services.length : 0) +
-        (Array.isArray(run.result.areas) ? run.result.areas.length : 0) +
-        (Array.isArray(run.result.brands) ? run.result.brands.length : 0) +
-        (Array.isArray(run.result.faqs) ? run.result.faqs.length : 0) +
-        (Array.isArray(run.result.credentials) ? run.result.credentials.length : 0),
-    }));
-
-    res.json({ runs });
-  });
+  // GET /clients/:slug/sources was removed. It reported which sources had run
+  // and nothing ever called it — the Sources page had no run history at all,
+  // and the endpoint sat there looking like the feature existed. That data now
+  // rides along on the client detail payload as `intakeRuns`, where the page
+  // already had it in hand.
 
   // --- Tier 1 discoverability ---------------------------------------------
 

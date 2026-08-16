@@ -114,7 +114,6 @@ Mounted at `/admin/api`. Requires a session.
 | `GET` `POST` | `/clients` |
 | `GET` `DELETE` | `/clients/:slug` |
 | `PATCH` | `/clients/:slug/settings` |
-| `GET` | `/clients/:slug/sources` |
 | `POST` | `/clients/:slug/intake/website` |
 | `POST` | `/clients/:slug/intake/places` |
 | `POST` | `/clients/:slug/promote` |

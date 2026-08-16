@@ -623,6 +623,29 @@ async function discoverabilityView(){
       '<table>'+manualRows+'</table></div>';
 }
 
+/**
+ * "ran 2 hours ago — 47 found", or the fallback when a source has never run.
+ *
+ * Relative rather than absolute because the only question this answers is
+ * whether what you are looking at is current. "16/08/2026, 14:34" makes you do
+ * that subtraction yourself.
+ */
+function lastRun(source, fallback){
+  const runs = detail.intakeRuns || [];
+  const run = runs.find(r=>r.source===source);
+  if(!run) return fallback;
+
+  let when = "";
+  if(run.ranAt){
+    const mins = Math.round((Date.now() - new Date(run.ranAt).getTime())/60000);
+    when = mins < 1 ? "just now"
+      : mins < 60 ? mins+" min ago"
+      : mins < 1440 ? Math.round(mins/60)+"h ago"
+      : Math.round(mins/1440)+"d ago";
+  }
+  return "ran "+when+(run.found ? " — "+run.found+" found" : "");
+}
+
 function sourcesView(){
   const p = detail.pendingIntake || {total:0};
   const S = (detail.settings && detail.settings.sources) || {};
@@ -648,7 +671,7 @@ function sourcesView(){
   // the Settings page, which meant a crawl that missed the services page sent
   // you to another screen to paste a URL and back again — the field you needed
   // as far as possible from the button you were pressing.
-  '<div class="card"><div class="card-h"><h2>1 &nbsp;Website</h2><span class="meta">run this first</span></div><div class="card-b">'+
+  '<div class="card"><div class="card-h"><h2>1 &nbsp;Website</h2><span class="meta">'+esc(lastRun("website","run this first"))+'</span></div><div class="card-b">'+
     '<div class="sub" style="margin:0 0 .7rem">Crawls the domain, respecting robots.txt. Prefers structured data the site already publishes. '+
     'It also picks up the client&rsquo;s Google place ID from their own markup &mdash; embedded maps and review widgets carry it &mdash; which is why this runs first: '+
     'for a service-area business that ID is the only way into Google.</div>'+
@@ -662,7 +685,7 @@ function sourcesView(){
     'a site saying &quot;What We Do&quot; instead of &quot;Services&quot; finds nothing otherwise. Leave blank to fall back to the heuristics.</div>'+
     '<button class="btn primary" data-run="website">Crawl website</button></div></div>'+
   '<div class="card"><div class="card-h"><h2>2 &nbsp;Google Places</h2>'+
-    '<span class="meta">'+(S.googlePlaceId?"place ID set":"needs a place ID")+'</span></div>'+
+    '<span class="meta">'+esc(lastRun("places", S.googlePlaceId?"place ID set":"needs a place ID"))+'</span></div>'+
     '<div class="card-b"><div class="sub" style="margin:0 0 .7rem">Hours, phone and address from public Google data using your own API key. Google permits storing place_id only, so treat the rest as a suggestion the owner confirms.</div>'+
     '<label class="f"><span>Google place ID'+
       (S.googlePlaceId?' &nbsp;<a href="https://www.google.com/maps/place/?q=place_id:'+encodeURIComponent(S.googlePlaceId)+'" target="_blank" rel="noopener">open ↗</a>':"")+
