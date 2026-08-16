@@ -254,6 +254,12 @@ queue where every click blocks the screen cannot be worked through at all.
 | Page | open a client, save, add, delete, bulk | The clicked button becomes a spinner and disables |
 | Long | crawl, Google pull, promote, Tier 1, database load, NAP, verify | **Dismissable overlay** naming the job. Hiding leaves it running — a crawl takes minutes, and holding someone hostage to it is not a feature |
 
+A dismissed job keeps its button spinning. Running jobs are held in a registry
+keyed by client and action, not in the DOM, and repainted after every render —
+otherwise navigating away and back reset the button while the crawl was still
+going. When a job lands on a page the person has since left, the data refreshes
+but the view does not re-render: that would wipe a half-filled profile form.
+
 Underneath all three, a thin bar at the top moves whenever any request is in
 flight. It lives inside the `api()` wrapper rather than at the call sites, so it
 covers endpoints nobody remembered to handle, including ones added later.

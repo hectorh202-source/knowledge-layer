@@ -332,6 +332,65 @@ function working(btn, label){
 }
 
 /**
+ * Long jobs still running, keyed by client and action.
+ *
+ * The registry exists because the button's running state used to live only in
+ * the DOM: hide the overlay, navigate away and come back, and the button was
+ * back to normal while the crawl was still going. State that outlives a render
+ * has to be held outside the thing being re-rendered.
+ */
+const running = new Map();
+
+/**
+ * Paint every button that belongs to a running job, and unpaint any that no
+ * longer does.
+ *
+ * Runs after each render, so a view rebuilt mid-job comes back with its button
+ * still spinning. Only jobs for the client on screen are painted — another
+ * client's crawl is running, but not here.
+ */
+function paintJobs(){
+  const stale = new Set(document.querySelectorAll("[data-busy]"));
+
+  for(const job of running.values()){
+    if(job.slug !== current) continue;
+    for(const btn of document.querySelectorAll(job.selector)){
+      stale.delete(btn);
+      if(btn.dataset.busy) continue;
+      btn.dataset.busy = "1";
+      btn.dataset.idle = btn.innerHTML;
+      btn.style.minWidth = btn.offsetWidth + "px";
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spin"></span>' + esc(job.label);
+    }
+  }
+
+  for(const btn of stale){
+    btn.innerHTML = btn.dataset.idle || btn.innerHTML;
+    btn.disabled = false;
+    btn.style.minWidth = "";
+    delete btn.dataset.busy;
+    delete btn.dataset.idle;
+  }
+}
+
+/**
+ * Start a long job. Returns the function that ends it.
+ *
+ * The selector is how the button is found again after a re-render, so it has
+ * to match the markup the view produces rather than the element clicked.
+ *
+ * No backticks anywhere in this file: it is all one template literal, and one
+ * in a comment ends the string right here.
+ */
+function startJob(selector, label){
+  const key = current + "|" + selector;
+  running.set(key, {slug: current, selector, label});
+  paintJobs();
+  return () => { running.delete(key); paintJobs(); };
+}
+
+/**
  * The blocking-but-dismissable overlay, for work measured in seconds.
  *
  * Hiding does not cancel: the request has already left, and offering a Cancel
@@ -1000,6 +1059,10 @@ async function render(){
   else if(view==="publishing") m.innerHTML = publishingView();
   else if(view==="settings") m.innerHTML = settingsView();
   else m.innerHTML = contentView(view);
+
+  // Anything still running gets its button back. Without this a re-render
+  // silently resets a job that has not finished.
+  paintJobs();
 }
 
 /**
@@ -1014,10 +1077,27 @@ async function render(){
  * two round trips deep, and against a database that is the difference between
  * a pause you notice and one you do not.
  */
-async function refresh(){
+async function refreshData(){
   const [d] = await Promise.all([api("/clients/"+current), loadClients()]);
   detail = d;
+}
+
+async function refresh(){
+  await refreshData();
   renderNav(); await render();
+}
+
+/**
+ * Finish a long job that may have outlived the page it started on.
+ *
+ * Re-rendering unconditionally would wipe whatever the person moved on to —
+ * including a half-filled profile form, if a crawl landed while they were
+ * typing in it. The sidebar is safe to rebuild either way; it holds no input.
+ */
+async function settle(at){
+  await refreshData();
+  renderNav();
+  if(current === at.slug && view === at.view) await render();
 }
 
 /** Section totals, after an item changed in place. */
@@ -1279,26 +1359,28 @@ document.addEventListener("click", async e => {
     }
 
     if(t.id==="runAudit"){
-      const done = working(t, "Checking");
+      const at = {slug:current, view};
+      const done = startJob("#runAudit", "Checking");
       const hide = busy("Running the Tier 1 checks",
         "Fetching the site as each AI crawler in turn, then reading robots.txt, the sitemap and the contact details. Usually a few seconds.");
       try{
         const r = await api("/clients/"+current+"/tier1/run",{method:"POST",body:JSON.stringify({})});
         toast(r.report.failed===0?"All automated checks passed.":r.report.failed+" check(s) failing.");
-      } finally { hide(); done(); await render(); }
+      } finally { hide(); done(); if(current===at.slug && view===at.view) await render(); }
       return;
     }
 
     if(t.dataset.gen){
-      const dry = t.dataset.gen==="dry";
+      const mode = t.dataset.gen, dry = mode==="dry";
+      const at = {slug:current, view};
       const out=$("genOut"); if(out) out.textContent="Running…";
-      const done = working(t, dry?"Previewing":"Generating");
+      const done = startJob('[data-gen="'+mode+'"]', dry?"Previewing":"Generating");
       const hide = busy(dry ? "Previewing the questions" : "Generating questions",
         "Assembling questions from this client's approved service areas, hours, credentials and brands.");
       try{
         const r = await api("/clients/"+current+"/generate/faqs",
           {method:"POST",body:JSON.stringify({dryRun:dry})});
-        await refresh();
+        await settle(at);
         if($("genOut")) $("genOut").textContent = r.output;
         toast(dry ? "Preview only — nothing written." : "Generated. Read them before approving.");
       } finally { hide(); done(); }
@@ -1313,14 +1395,15 @@ document.addEventListener("click", async e => {
         promote:["Promoting candidates","Merging every source into the content lists. Blanks get filled; nothing a person wrote is overwritten."],
       }[kind];
 
+      const at = {slug:current, view};
       const out=$("runOut"); if(out) out.textContent="Running…";
-      const done = working(t, "Running");
+      const done = startJob('[data-run="'+kind+'"]', "Running");
       const hide = busy(copy[0], copy[1]);
 
       try{
         const map={places:"/intake/places",website:"/intake/website",promote:"/promote"};
         const r = await api("/clients/"+current+map[kind],{method:"POST",body:JSON.stringify({})});
-        await refresh();
+        await settle(at);
         if($("runOut")) $("runOut").textContent = r.output;
         if(kind!=="promote" && detail.pendingIntake && detail.pendingIntake.total>0){
           toast(detail.pendingIntake.total+" candidates found — press Promote to add them.", 6000);
@@ -1334,7 +1417,7 @@ document.addEventListener("click", async e => {
     if(t.dataset.db){
       const mode = t.dataset.db;
       const out=$("dbOut"); if(out) out.textContent="Running…";
-      const done = working(t, mode==="dry"?"Checking":"Loading");
+      const done = startJob('[data-db="'+mode+'"]', mode==="dry"?"Checking":"Loading");
       const hide = busy(
         mode==="dry" ? "Checking what would be loaded" : mode==="publish" ? "Loading and publishing" : "Loading into the database",
         mode==="publish"
@@ -1350,7 +1433,7 @@ document.addEventListener("click", async e => {
     }
 
     if(t.id==="loadJsonld"){
-      const done = working(t, "Generating");
+      const done = startJob("#loadJsonld", "Generating");
       let r; try { r = await api("/clients/"+current+"/jsonld"); } finally { done(); }
       $("jsonldOut").textContent = JSON.stringify(r.graph,null,2);
 
@@ -1425,7 +1508,7 @@ document.addEventListener("click", async e => {
 
     if(t.id==="runNap"){
       const out=$("napOut"); out.innerHTML='<div class="sub" style="margin:0">Comparing…</div>';
-      const done = working(t, "Comparing");
+      const done = startJob("#runNap", "Comparing");
       const hide = busy("Comparing name, address and phone",
         "Reading the live site alongside the profile, the crawl and Google. The live fetch is what takes the time.");
       let r; try { r = await api("/clients/"+current+"/nap"); } finally { hide(); done(); }
@@ -1458,7 +1541,7 @@ document.addEventListener("click", async e => {
 
     if(t.id==="verifyMarkup"){
       const out=$("verifyOut"); out.innerHTML='<div class="sub">Reading the live site…</div>';
-      const done = working(t, "Checking");
+      const done = startJob("#verifyMarkup", "Checking");
       const hide = busy("Checking the live site",
         "Fetching the client's site and comparing the markup published there against what this app would generate now.");
       let r;
