@@ -101,6 +101,11 @@ button.btn{font:inherit;font-size:.83rem;padding:.4rem .75rem;border-radius:7px;
   border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer}
 button.btn:hover{filter:brightness(1.1)}
 button.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+/* Dismissals. A Cancel that looks identical to Confirm makes a dialog a
+   coin toss, so it drops back to an outline — present and clickable, but not
+   competing with the action the dialog exists to perform. */
+button.btn.quiet{background:var(--panel);border-color:var(--line);color:var(--ink)}
+button.btn.quiet:hover{border-color:var(--accent);filter:none}
 /* Destructive actions stay outlined and red. With everything else solid blue,
    a quiet red button is both unmistakable and — correctly — less inviting to
    press than the action you actually came to perform. */
@@ -157,7 +162,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
   </div>
   <div class="dlg-f">
     <button class="btn" type="button" id="pickAdd">+ Add client</button>
-    <button class="btn" type="button" id="pickCancel">Cancel</button>
+    <button class="btn quiet" type="button" id="pickCancel">Cancel</button>
   </div>
 </dialog>
 
@@ -175,7 +180,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
     <div class="sub" style="margin:0">Nothing is invented. The profile starts empty and fills from Google, then the website, then you.</div>
   </div>
   <div class="dlg-f">
-    <button class="btn" type="button" id="ncCancel">Cancel</button>
+    <button class="btn quiet" type="button" id="ncCancel">Cancel</button>
     <button class="btn primary" type="button" id="ncGo">Create</button>
   </div>
 </dialog>
