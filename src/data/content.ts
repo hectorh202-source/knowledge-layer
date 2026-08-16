@@ -71,12 +71,15 @@ export const saveCredentials = (t: string, items: CredentialEntry[]) =>
   writeItems(t, "credentials", items);
 
 /** Generic access by kind, for the admin routes. */
-export function loadByKind(tenant: string, kind: ContentKind): Record<string, unknown>[] {
+export function loadByKind(
+  tenant: string,
+  kind: ContentKind
+): Promise<Record<string, unknown>[]> {
   return readItems<Record<string, unknown>>(tenant, kind);
 }
 
-export function saveByKind(tenant: string, kind: ContentKind, items: unknown[]): void {
-  writeItems(tenant, kind, items);
+export function saveByKind(tenant: string, kind: ContentKind, items: unknown[]): Promise<void> {
+  return writeItems(tenant, kind, items);
 }
 
 /** Live content only: approved by a human and marked for publication. */

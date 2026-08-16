@@ -1,10 +1,9 @@
 import "dotenv/config";
-import * as fs from "fs";
-import * as path from "path";
 import { DIRECTORIES, directoryFor, type Directory } from "./directories";
 import { loadProfile } from "../data/profile";
 import { loadServiceAreas } from "../data/content";
-import { intakeDir, readSettings } from "../tenancy/store";
+import { readSettings } from "../tenancy/store";
+import { storage } from "../tenancy/storage";
 import type { IntakeResult } from "../intake/types";
 
 /**
@@ -58,21 +57,11 @@ export interface DirectoryReport {
   notes: string[];
 }
 
-function readIntake(tenant: string, file: string): IntakeResult | null {
-  const full = path.join(intakeDir(tenant), file);
-  if (!fs.existsSync(full)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(full, "utf8")) as IntakeResult;
-  } catch {
-    return null;
-  }
-}
-
-export function auditDirectories(tenant: string): DirectoryReport {
-  const settings = readSettings(tenant);
+export async function auditDirectories(tenant: string): Promise<DirectoryReport> {
+  const settings = await readSettings(tenant);
   if (!settings) throw new Error(`No client "${tenant}".`);
 
-  const profile = loadProfile(tenant);
+  const profile = await loadProfile(tenant);
   const notes: string[] = [];
 
   // Every URL we hold that might be a profile somewhere, with its origin, so a
@@ -83,7 +72,7 @@ export function auditDirectories(tenant: string): DirectoryReport {
     candidates.push({ url, via: "business profile" });
   }
 
-  const website = readIntake(tenant, "website.json");
+  const website = (await storage().readIntake(tenant, "website")) as IntakeResult | null;
   if (website) {
     for (const candidate of website.entity.profiles ?? []) {
       candidates.push({ url: candidate.value, via: "linked from the website" });
@@ -103,7 +92,7 @@ export function auditDirectories(tenant: string): DirectoryReport {
    * fallback. The domain is never used — "find_loc=junkchucker.com" is not a
    * place, and a search link that returns nothing looks like an absent listing.
    */
-  const areas = loadServiceAreas(tenant)
+  const areas = (await loadServiceAreas(tenant))
     .filter((area) => area.approved)
     .map((area) => area.name);
 
@@ -172,12 +161,12 @@ export function auditDirectories(tenant: string): DirectoryReport {
   };
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const i = argv.indexOf("--tenant");
   const tenant = i !== -1 ? argv[i + 1] : process.env.TENANT_SLUG ?? "";
 
-  const report = auditDirectories(tenant);
+  const report = await auditDirectories(tenant);
 
   console.log(`\nDirectory presence`);
   console.log(`  business : ${report.business}`);
@@ -211,10 +200,8 @@ function main(): void {
 }
 
 if (require.main === module) {
-  try {
-    main();
-  } catch (error) {
+  main().catch((error) => {
     console.error(`\nDirectory audit failed: ${error instanceof Error ? error.message : error}\n`);
     process.exit(1);
-  }
+  });
 }

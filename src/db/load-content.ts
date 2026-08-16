@@ -42,17 +42,17 @@ async function main(): Promise<void> {
   if (dryRun) console.log(`  DRY RUN — nothing will be written`);
   console.log("");
 
-  if (!profileExists(slug)) throw new Error("content/business-profile.json not found.");
+  if (!(await profileExists(slug))) throw new Error(`No business profile for "${slug}".`);
 
-  const profile = loadProfile(slug);
-  if (!profile) throw new Error("Could not read content/business-profile.json");
+  const profile = await loadProfile(slug);
+  if (!profile) throw new Error(`Could not read the business profile for "${slug}".`);
 
   const validation = validateProfile(profile);
 
   if (validation.blocking.length > 0) {
     console.log(`  Blocking gaps — an AI cannot resolve this business without them:`);
     for (const field of validation.blocking) console.log(`    - ${field}`);
-    console.log(`\n  Fill these in content/business-profile.json and run again.`);
+    console.log(`\n  Fill these in on the business profile and run again.`);
     console.log(`  Nothing was written.\n`);
     process.exit(1);
   }
@@ -63,18 +63,24 @@ async function main(): Promise<void> {
     console.log("");
   }
 
-  const services = loadServices(slug).filter((item) => item.approved);
-  const areas = loadServiceAreas(slug).filter((item) => item.approved);
-  const brands = loadBrands(slug).filter((item) => item.approved);
-  const faqs = loadFaqs(slug).filter((item) => item.approved);
-  const credentials = loadCredentials(slug).filter((item) => item.approved);
+  const allServices = await loadServices(slug);
+  const allAreas = await loadServiceAreas(slug);
+  const allBrands = await loadBrands(slug);
+  const allFaqs = await loadFaqs(slug);
+  const allCredentials = await loadCredentials(slug);
+
+  const services = allServices.filter((item) => item.approved);
+  const areas = allAreas.filter((item) => item.approved);
+  const brands = allBrands.filter((item) => item.approved);
+  const faqs = allFaqs.filter((item) => item.approved);
+  const credentials = allCredentials.filter((item) => item.approved);
 
   const counts: [string, number, number][] = [
-    ["services", services.length, loadServices(slug).length],
-    ["service areas", areas.length, loadServiceAreas(slug).length],
-    ["brands", brands.length, loadBrands(slug).length],
-    ["faqs", faqs.length, loadFaqs(slug).length],
-    ["credentials", credentials.length, loadCredentials(slug).length],
+    ["services", services.length, allServices.length],
+    ["service areas", areas.length, allAreas.length],
+    ["brands", brands.length, allBrands.length],
+    ["faqs", faqs.length, allFaqs.length],
+    ["credentials", credentials.length, allCredentials.length],
   ];
 
   console.log(`  name     : ${profile.name}`);

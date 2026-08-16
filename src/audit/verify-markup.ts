@@ -120,7 +120,7 @@ function compare(
 }
 
 export async function verifyMarkup(tenant: string): Promise<VerifyResult> {
-  const settings = readSettings(tenant);
+  const settings = await readSettings(tenant);
   if (!settings) throw new Error(`No client "${tenant}".`);
   if (!settings.domain) throw new Error(`Client "${tenant}" has no domain set.`);
 

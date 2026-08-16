@@ -96,14 +96,14 @@ async function main(): Promise<void> {
    * Disabled in production for the same reason: it would expose unapproved
    * content, and there is no authentication on this service.
    */
-  app.get("/dashboard", (_req: Request, res: Response) => {
+  app.get("/dashboard", async (_req: Request, res: Response) => {
     if (process.env.NODE_ENV === "production") {
       res.status(404).json({ error: "not_found" });
       return;
     }
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.setHeader("Cache-Control", "no-store");
-    res.send(renderDashboard(buildDashboardData(options.tenant)));
+    res.send(renderDashboard(await buildDashboardData(options.tenant)));
   });
 
   /**

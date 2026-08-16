@@ -1,5 +1,4 @@
 import { execFile } from "child_process";
-import * as fs from "fs";
 import * as path from "path";
 import express, { type NextFunction, type Request, type Response, type Router } from "express";
 import {
@@ -39,7 +38,6 @@ import {
   CONTENT_KINDS,
   createTenant,
   deleteTenant,
-  intakeDir,
   listTenantSlugs,
   readSettings,
   readTier1,
@@ -50,6 +48,7 @@ import {
   type TenantSettings,
   type TenantSummary,
 } from "../tenancy/store";
+import { storage } from "../tenancy/storage";
 
 /**
  * Admin API.
@@ -69,8 +68,8 @@ function isContentKind(value: string): value is ContentKind {
   return (CONTENT_KINDS as string[]).includes(value);
 }
 
-function summarize(slug: string): TenantSummary | null {
-  const settings = readSettings(slug);
+async function summarize(slug: string): Promise<TenantSummary | null> {
+  const settings = await readSettings(slug);
   if (!settings) return null;
 
   let itemCount = 0;
@@ -78,19 +77,19 @@ function summarize(slug: string): TenantSummary | null {
   let publishedCount = 0;
 
   for (const kind of CONTENT_KINDS) {
-    for (const item of loadByKind(slug, kind)) {
+    for (const item of await loadByKind(slug, kind)) {
       itemCount++;
       if (item.approved === true) approvedCount++;
       if (item.approved === true && item.published === true) publishedCount++;
     }
   }
 
-  const profile = loadProfile(slug);
+  const profile = await loadProfile(slug);
 
   // Tier 1 status, rolled up so the client list can show who is blocked
   // without opening each one — the thing that matters at twenty clients
   // rather than one.
-  const tier1 = readTier1(slug);
+  const tier1 = await readTier1(slug);
   const report = tier1.report as { passed?: number; failed?: number } | null;
   const manualDone = MANUAL_CHECKS.filter((check) => tier1.manual[check.id]?.checked).length;
 
@@ -120,22 +119,28 @@ function summarize(slug: string): TenantSummary | null {
  * found 33 services leaves every section reading zero, and nothing on screen
  * says why.
  */
-function countPendingIntake(slug: string): Record<string, number> & { total: number } {
-  const dir = intakeDir(slug);
+async function countPendingIntake(
+  slug: string
+): Promise<Record<string, number> & { total: number }> {
   const pending: Record<string, number> & { total: number } = { total: 0 };
-  if (!fs.existsSync(dir)) return pending;
+  const runs = await storage().listIntake(slug);
+  if (runs.length === 0) return pending;
 
   const key = (value: string) => value.toLowerCase().replace(/\s+/g, " ").trim();
 
   const existing: Record<string, Set<string>> = {
-    services: new Set(loadByKind(slug, "services").map((item) => key(String(item.name ?? "")))),
-    "service-areas": new Set(
-      loadByKind(slug, "service-areas").map((item) => key(String(item.name ?? "")))
+    services: new Set(
+      (await loadByKind(slug, "services")).map((item) => key(String(item.name ?? "")))
     ),
-    brands: new Set(loadByKind(slug, "brands").map((item) => key(String(item.name ?? "")))),
-    faqs: new Set(loadByKind(slug, "faqs").map((item) => key(String(item.question ?? "")))),
+    "service-areas": new Set(
+      (await loadByKind(slug, "service-areas")).map((item) => key(String(item.name ?? "")))
+    ),
+    brands: new Set((await loadByKind(slug, "brands")).map((item) => key(String(item.name ?? "")))),
+    faqs: new Set(
+      (await loadByKind(slug, "faqs")).map((item) => key(String(item.question ?? "")))
+    ),
     credentials: new Set(
-      loadByKind(slug, "credentials").map((item) =>
+      (await loadByKind(slug, "credentials")).map((item) =>
         key(String(item.identifier ?? item.title ?? ""))
       )
     ),
@@ -151,14 +156,7 @@ function countPendingIntake(slug: string): Record<string, number> & { total: num
     credentials: new Set(),
   };
 
-  for (const file of fs.readdirSync(dir).filter((name) => name.endsWith(".json"))) {
-    let result: Record<string, unknown>;
-    try {
-      result = JSON.parse(fs.readFileSync(path.join(dir, file), "utf8"));
-    } catch {
-      continue;
-    }
-
+  for (const { result } of runs) {
     const collect = (items: unknown, kind: string, field: string) => {
       if (!Array.isArray(items)) return;
       for (const raw of items) {
@@ -366,12 +364,14 @@ export function createAdminRouter(): Router {
     void (async () => {
       try {
         const visible = await slugsFor(req.agency?.id ?? null);
-        const clients = listTenantSlugs()
-          // Null means agencies are off, so everything is visible — the local
-          // single-operator setup this app was until today.
-          .filter((slug) => visible === null || visible.includes(slug))
-          .map(summarize)
-          .filter((entry): entry is TenantSummary => entry !== null);
+        const summaries = await Promise.all(
+          (await listTenantSlugs())
+            // Null means agencies are off, so everything is visible — the local
+            // single-operator setup this app was until today.
+            .filter((slug) => visible === null || visible.includes(slug))
+            .map(summarize)
+        );
+        const clients = summaries.filter((entry): entry is TenantSummary => entry !== null);
         res.json({ clients, agency: req.agency ?? null });
       } catch (error) {
         res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
@@ -386,7 +386,7 @@ export function createAdminRouter(): Router {
         if (!name || typeof name !== "string") throw new Error("A business name is required.");
         if (!domain || typeof domain !== "string") throw new Error("A domain is required.");
 
-        const settings = createTenant({ name, domain, slug, schemaType });
+        const settings = await createTenant({ name, domain, slug, schemaType });
 
         // Claim it before returning. A client created but unclaimed would be
         // invisible to the person who just made it, and claimable by the next
@@ -395,7 +395,7 @@ export function createAdminRouter(): Router {
           try {
             await claim(req.agency.id, settings.slug);
           } catch (error) {
-            deleteTenant(settings.slug);
+            await deleteTenant(settings.slug);
             throw new Error(
               `Created the client but could not assign it to your agency, so it was removed. ${
                 error instanceof Error ? error.message : String(error)
@@ -404,7 +404,7 @@ export function createAdminRouter(): Router {
           }
         }
 
-        res.status(201).json({ client: summarize(settings.slug) });
+        res.status(201).json({ client: await summarize(settings.slug) });
       } catch (error) {
         res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
       }
@@ -414,7 +414,7 @@ export function createAdminRouter(): Router {
   router.delete("/clients/:slug", (req: Request, res: Response) => {
     void (async () => {
       try {
-        deleteTenant(req.params.slug);
+        await deleteTenant(req.params.slug);
         // Release after the files are gone. Releasing first would leave an
         // orphan folder that no agency owns and nobody can see.
         await release(req.params.slug);
@@ -427,23 +427,25 @@ export function createAdminRouter(): Router {
 
   // --- one client ----------------------------------------------------------
 
-  router.use("/clients/:slug", (req: Request, res: Response, next) => {
-    if (!tenantExists(req.params.slug)) {
-      res.status(404).json({ error: `No client "${req.params.slug}".` });
-      return;
-    }
-    next();
+  router.use("/clients/:slug", (req: Request, res: Response, next: NextFunction) => {
+    void (async () => {
+      if (!(await tenantExists(req.params.slug))) {
+        res.status(404).json({ error: `No client "${req.params.slug}".` });
+        return;
+      }
+      next();
+    })();
   });
 
-  router.get("/clients/:slug", (req: Request, res: Response) => {
+  router.get("/clients/:slug", async (req: Request, res: Response) => {
     const slug = req.params.slug;
-    const profile = loadProfile(slug);
+    const profile = await loadProfile(slug);
     const validation = profile
       ? validateProfile(profile)
       : { blocking: ["no business profile"], missing: [] };
 
-    const sections = CONTENT_KINDS.map((kind) => {
-      const items = loadByKind(slug, kind).map((item, index) => ({
+    const sections = await Promise.all(CONTENT_KINDS.map(async (kind) => {
+      const items = (await loadByKind(slug, kind)).map((item, index) => ({
         index,
         ...itemLabels(kind, item),
         approved: item.approved === true,
@@ -459,33 +461,33 @@ export function createAdminRouter(): Router {
         approved: items.filter((item) => item.approved).length,
         published: items.filter((item) => item.approved && item.published).length,
       };
-    });
+    }));
 
     // An expired credential is a compliance claim that stopped being true.
-    const expired = loadCredentials(slug).filter(
+    const expired = (await loadCredentials(slug)).filter(
       (credential: CredentialEntry) => credential.approved && !isCurrent(credential)
     ).length;
 
     res.json({
-      settings: readSettings(slug),
-      summary: summarize(slug),
-      profile: loadProfileRaw(slug),
+      settings: await readSettings(slug),
+      summary: await summarize(slug),
+      profile: await loadProfileRaw(slug),
       validation,
       openDays: profile ? profile.hours.filter((entry) => !entry.isClosed).length : 0,
       sections,
       expiredCredentials: expired,
-      pendingIntake: countPendingIntake(slug),
+      pendingIntake: await countPendingIntake(slug),
       // Included up front rather than behind a button. The audit is pure file
       // reads with no network call, so there is no cost to it, and which
       // directories get checked should not be something you have to click to
       // discover.
-      directories: auditDirectories(slug),
+      directories: await auditDirectories(slug),
     });
   });
 
-  router.patch("/clients/:slug/settings", (req: Request, res: Response) => {
+  router.patch("/clients/:slug/settings", async (req: Request, res: Response) => {
     try {
-      const current = readSettings(req.params.slug);
+      const current = await readSettings(req.params.slug);
       if (!current) throw new Error("Client not found.");
 
       // name, domain and schemaType are deliberately not settable here. They
@@ -505,19 +507,19 @@ export function createAdminRouter(): Router {
         sources: { ...current.sources, ...(req.body.sources ?? {}) },
       };
 
-      writeSettings(next);
+      await writeSettings(next);
       res.json({ settings: next });
     } catch (error) {
       res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
     }
   });
 
-  router.put("/clients/:slug/profile", (req: Request, res: Response) => {
+  router.put("/clients/:slug/profile", async (req: Request, res: Response) => {
     try {
-      const raw = loadProfileRaw(req.params.slug);
-      // Merge rather than replace, so the file's header comments survive edits.
-      saveProfileRaw(req.params.slug, { ...raw, ...req.body });
-      res.json({ profile: loadProfileRaw(req.params.slug) });
+      const raw = await loadProfileRaw(req.params.slug);
+      // Merge rather than replace, so anything the form didn't send survives.
+      await saveProfileRaw(req.params.slug, { ...raw, ...req.body });
+      res.json({ profile: await loadProfileRaw(req.params.slug) });
     } catch (error) {
       res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
     }
@@ -525,31 +527,31 @@ export function createAdminRouter(): Router {
 
   // --- content -------------------------------------------------------------
 
-  router.patch("/clients/:slug/content/:kind/:index", (req: Request, res: Response) => {
+  router.patch("/clients/:slug/content/:kind/:index", async (req: Request, res: Response) => {
     try {
       const { slug, kind, index } = req.params;
       if (!isContentKind(kind)) throw new Error(`Unknown content kind "${kind}".`);
 
-      const items = loadByKind(slug, kind);
+      const items = await loadByKind(slug, kind);
       const position = Number(index);
       if (!Number.isInteger(position) || position < 0 || position >= items.length) {
         throw new Error("No such item.");
       }
 
       items[position] = { ...items[position], ...req.body };
-      saveByKind(slug, kind, items);
+      await saveByKind(slug, kind, items);
       res.json({ item: items[position] });
     } catch (error) {
       res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
     }
   });
 
-  router.post("/clients/:slug/content/:kind", (req: Request, res: Response) => {
+  router.post("/clients/:slug/content/:kind", async (req: Request, res: Response) => {
     try {
       const { slug, kind } = req.params;
       if (!isContentKind(kind)) throw new Error(`Unknown content kind "${kind}".`);
 
-      const items = loadByKind(slug, kind);
+      const items = await loadByKind(slug, kind);
       // Typed by hand, so it is approved on arrival but still not published —
       // publication stays a separate, deliberate act.
       items.push({
@@ -559,26 +561,26 @@ export function createAdminRouter(): Router {
         provenance: { source: "manual", url: null, method: "entered by hand", confidence: "high" },
       });
 
-      saveByKind(slug, kind, items);
+      await saveByKind(slug, kind, items);
       res.status(201).json({ count: items.length });
     } catch (error) {
       res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
     }
   });
 
-  router.delete("/clients/:slug/content/:kind/:index", (req: Request, res: Response) => {
+  router.delete("/clients/:slug/content/:kind/:index", async (req: Request, res: Response) => {
     try {
       const { slug, kind, index } = req.params;
       if (!isContentKind(kind)) throw new Error(`Unknown content kind "${kind}".`);
 
-      const items = loadByKind(slug, kind);
+      const items = await loadByKind(slug, kind);
       const position = Number(index);
       if (!Number.isInteger(position) || position < 0 || position >= items.length) {
         throw new Error("No such item.");
       }
 
       items.splice(position, 1);
-      saveByKind(slug, kind, items);
+      await saveByKind(slug, kind, items);
       res.json({ ok: true });
     } catch (error) {
       res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
@@ -586,13 +588,13 @@ export function createAdminRouter(): Router {
   });
 
   /** Bulk approve or publish, for working through a large intake queue. */
-  router.post("/clients/:slug/content/:kind/bulk", (req: Request, res: Response) => {
+  router.post("/clients/:slug/content/:kind/bulk", async (req: Request, res: Response) => {
     try {
       const { slug, kind } = req.params;
       if (!isContentKind(kind)) throw new Error(`Unknown content kind "${kind}".`);
 
       const { action } = req.body ?? {};
-      const items = loadByKind(slug, kind);
+      const items = await loadByKind(slug, kind);
 
       for (const item of items) {
         if (action === "approve") item.approved = true;
@@ -606,7 +608,7 @@ export function createAdminRouter(): Router {
         else throw new Error(`Unknown action "${action}".`);
       }
 
-      saveByKind(slug, kind, items);
+      await saveByKind(slug, kind, items);
       res.json({ count: items.length });
     } catch (error) {
       res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
@@ -617,7 +619,7 @@ export function createAdminRouter(): Router {
 
   router.post("/clients/:slug/intake/website", async (req: Request, res: Response) => {
     const slug = req.params.slug;
-    const settings = readSettings(slug);
+    const settings = await readSettings(slug);
     if (!settings?.domain) {
       res.status(400).json({ error: "Set a domain in Settings first." });
       return;
@@ -659,9 +661,9 @@ export function createAdminRouter(): Router {
     }
   });
 
-  router.get("/clients/:slug/directories", (req: Request, res: Response) => {
+  router.get("/clients/:slug/directories", async (req: Request, res: Response) => {
     try {
-      res.json(auditDirectories(req.params.slug));
+      res.json(await auditDirectories(req.params.slug));
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
     }
@@ -710,7 +712,7 @@ export function createAdminRouter(): Router {
   router.get("/clients/:slug/jsonld", async (req: Request, res: Response) => {
     try {
       const slug = req.params.slug;
-      const settings = readSettings(slug)!;
+      const settings = (await readSettings(slug))!;
       const source = new FileSource({ tenant: slug, includeUnreviewed: false });
 
       const result = await buildJsonLd(source, {
@@ -725,40 +727,40 @@ export function createAdminRouter(): Router {
   });
 
   /** Which sources have run, and when. */
-  router.get("/clients/:slug/sources", (req: Request, res: Response) => {
-    const dir = intakeDir(req.params.slug);
-    if (!fs.existsSync(dir)) {
-      res.json({ runs: [] });
-      return;
-    }
-
-    const runs = fs
-      .readdirSync(dir)
-      .filter((file) => file.endsWith(".json"))
-      .map((file) => {
-        const stat = fs.statSync(path.join(dir, file));
-        return { file, ranAt: stat.mtime.toISOString(), bytes: stat.size };
-      });
+  router.get("/clients/:slug/sources", async (req: Request, res: Response) => {
+    const runs = (await storage().listIntake(req.params.slug)).map((run) => ({
+      file: run.source,
+      ranAt: run.ranAt,
+      // The candidate count, not the byte size. Bytes were an artefact of
+      // reading the file off disk and told nobody anything; "33 services found"
+      // is the thing someone is actually looking at this view to learn.
+      items:
+        (Array.isArray(run.result.services) ? run.result.services.length : 0) +
+        (Array.isArray(run.result.areas) ? run.result.areas.length : 0) +
+        (Array.isArray(run.result.brands) ? run.result.brands.length : 0) +
+        (Array.isArray(run.result.faqs) ? run.result.faqs.length : 0) +
+        (Array.isArray(run.result.credentials) ? run.result.credentials.length : 0),
+    }));
 
     res.json({ runs });
   });
 
   // --- Tier 1 discoverability ---------------------------------------------
 
-  router.get("/clients/:slug/tier1", (req: Request, res: Response) => {
-    const state = readTier1(req.params.slug);
+  router.get("/clients/:slug/tier1", async (req: Request, res: Response) => {
+    const state = await readTier1(req.params.slug);
     res.json({ ...state, manualChecks: MANUAL_CHECKS });
   });
 
   router.post("/clients/:slug/tier1/run", async (req: Request, res: Response) => {
     try {
       const slug = req.params.slug;
-      const settings = readSettings(slug);
+      const settings = await readSettings(slug);
       if (!settings?.domain) throw new Error("Set a domain in Settings first.");
 
       const report = await runTier1Audit(settings.domain);
-      const state = readTier1(slug);
-      writeTier1(slug, { ...state, report });
+      const state = await readTier1(slug);
+      await writeTier1(slug, { ...state, report });
 
       res.json({ report });
     } catch (error) {
@@ -766,10 +768,10 @@ export function createAdminRouter(): Router {
     }
   });
 
-  router.patch("/clients/:slug/tier1/manual/:id", (req: Request, res: Response) => {
+  router.patch("/clients/:slug/tier1/manual/:id", async (req: Request, res: Response) => {
     try {
       const slug = req.params.slug;
-      const state = readTier1(slug);
+      const state = await readTier1(slug);
 
       state.manual[req.params.id] = {
         checked: req.body?.checked === true,
@@ -777,7 +779,7 @@ export function createAdminRouter(): Router {
         updatedAt: new Date().toISOString(),
       };
 
-      writeTier1(slug, state);
+      await writeTier1(slug, state);
       res.json({ manual: state.manual });
     } catch (error) {
       res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
@@ -838,7 +840,7 @@ export function createAdminRouter(): Router {
         serviceRoleKey: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY),
         googleMaps: Boolean(process.env.GOOGLE_MAPS_API_KEY),
       },
-      clients: listTenantSlugs().length,
+      clients: (await listTenantSlugs()).length,
     });
   });
 

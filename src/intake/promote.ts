@@ -1,6 +1,4 @@
 import "dotenv/config";
-import * as fs from "fs";
-import * as path from "path";
 import {
   loadBrands,
   loadCredentials,
@@ -19,13 +17,14 @@ import {
   type ServiceEntry,
 } from "../data/content";
 import { emptyEntityCandidates, type Candidate, type IntakeResult } from "./types";
-import { intakeDir, profilePath, readSettings } from "../tenancy/store";
+import { readSettings } from "../tenancy/store";
+import { storage } from "../tenancy/storage";
 
 /**
  * Promotes intake candidates into a client's content files.
  *
- *   npm run promote -- --tenant titanz
- *   npm run promote -- --tenant titanz --dry-run
+ *   npm run promote -- --tenant acme
+ *   npm run promote -- --tenant acme --dry-run
  *
  * TWO RULES, both structural rather than a matter of care:
  *
@@ -143,43 +142,33 @@ async function main(): Promise<void> {
     return i !== -1 ? argv[i + 1] : undefined;
   };
 
-  const tenant = get("--tenant") ?? process.env.TENANT_SLUG ?? "titanz";
-  const settings = readSettings(tenant);
+  const tenant = get("--tenant") ?? process.env.TENANT_SLUG ?? "";
+  if (!tenant) throw new Error("No client. Pass --tenant, or set TENANT_SLUG.");
+  const settings = await readSettings(tenant);
   if (!settings) throw new Error(`No client "${tenant}". Create it in the portal first.`);
 
   const domain = get("--domain") ?? settings.domain;
   if (!domain) throw new Error(`Client "${tenant}" has no domain set.`);
 
   const dryRun = argv.includes("--dry-run");
-  const dir = intakeDir(tenant);
-  const PROFILE_FILE = profilePath(tenant);
 
-  if (!fs.existsSync(dir)) {
-    throw new Error(`No intake found for "${tenant}". Run a source first.`);
-  }
-
-  // Merge every source that has run — website.json, places.json, and whatever
-  // gets added later. Candidates from different sources agreeing on a value is
-  // the strongest corroboration available without asking a human.
-  const sourceFiles = fs
-    .readdirSync(dir)
-    .filter((file) => file.endsWith(".json"))
-    .sort();
-
-  if (sourceFiles.length === 0) {
-    throw new Error(`No intake files for "${tenant}".`);
-  }
-
-  const sources = sourceFiles.map((file) => ({
-    file,
-    result: JSON.parse(fs.readFileSync(path.join(dir, file), "utf8")) as IntakeResult,
+  // Merge every source that has run — website, places, and whatever gets added
+  // later. Candidates from different sources agreeing on a value is the
+  // strongest corroboration available without asking a human.
+  const sources = (await storage().listIntake(tenant)).map((entry) => ({
+    file: entry.source,
+    result: entry.result as unknown as IntakeResult,
   }));
+
+  if (sources.length === 0) {
+    throw new Error(`No intake for "${tenant}". Run a source first.`);
+  }
 
   const result = mergeIntake(sources.map((source) => source.result));
 
   console.log(`\nPromote intake candidates`);
   console.log(`  client  : ${settings.name}`);
-  console.log(`  sources : ${sourceFiles.join(", ")}`);
+  console.log(`  sources : ${sources.map((source) => source.file).join(", ")}`);
   if (dryRun) console.log(`  DRY RUN — nothing will be written`);
   console.log("");
 
@@ -190,7 +179,7 @@ async function main(): Promise<void> {
   }
 
   // --- business profile ----------------------------------------------------
-  const profile = JSON.parse(fs.readFileSync(PROFILE_FILE, "utf8")) as Record<string, unknown>;
+  const profile = (await storage().readProfile(tenant)) ?? {};
   const address = (profile.address ?? {}) as Record<string, unknown>;
 
   const filled: string[] = [];
@@ -290,7 +279,7 @@ async function main(): Promise<void> {
   }
 
   // --- FAQs ----------------------------------------------------------------
-  const existingFaqs = loadFaqs(tenant);
+  const existingFaqs = await loadFaqs(tenant);
   const seenQuestions = new Set(existingFaqs.map((faq) => normalizeQuestion(faq.question)));
 
   const newFaqs: FaqEntry[] = result.faqs
@@ -309,7 +298,7 @@ async function main(): Promise<void> {
     }));
 
   // --- credentials ---------------------------------------------------------
-  const existingCredentials = loadCredentials(tenant);
+  const existingCredentials = await loadCredentials(tenant);
   const seenCredentials = new Set(
     existingCredentials.map((c) => `${c.kind}:${(c.identifier ?? c.title).toLowerCase()}`)
   );
@@ -335,7 +324,7 @@ async function main(): Promise<void> {
   // --- services, areas, brands --------------------------------------------
   const key = (value: string) => value.toLowerCase().replace(/\s+/g, " ").trim();
 
-  const existingServices = loadServices(tenant);
+  const existingServices = await loadServices(tenant);
   const seenServices = new Set(existingServices.map((item) => key(item.name)));
   const newServices: ServiceEntry[] = result.services
     .filter((item) => !seenServices.has(key(item.name)))
@@ -348,7 +337,7 @@ async function main(): Promise<void> {
       provenance: toProvenance(item.provenance),
     }));
 
-  const existingAreas = loadServiceAreas(tenant);
+  const existingAreas = await loadServiceAreas(tenant);
   const seenAreas = new Set(existingAreas.map((item) => key(item.name)));
   const newAreas: ServiceAreaEntry[] = result.areas
     .filter((item) => !seenAreas.has(key(item.name)))
@@ -360,7 +349,7 @@ async function main(): Promise<void> {
       provenance: toProvenance(item.provenance),
     }));
 
-  const existingBrands = loadBrands(tenant);
+  const existingBrands = await loadBrands(tenant);
   const seenBrands = new Set(existingBrands.map((item) => key(item.name)));
   const newBrands: BrandEntry[] = result.brands
     .filter((item) => !seenBrands.has(key(item.name)))
@@ -398,12 +387,12 @@ async function main(): Promise<void> {
     return;
   }
 
-  fs.writeFileSync(PROFILE_FILE, JSON.stringify(profile, null, 2) + "\n", "utf8");
-  saveServices(tenant, [...existingServices, ...newServices]);
-  saveServiceAreas(tenant, [...existingAreas, ...newAreas]);
-  saveBrands(tenant, [...existingBrands, ...newBrands]);
-  saveFaqs(tenant, [...existingFaqs, ...newFaqs]);
-  saveCredentials(tenant, [...existingCredentials, ...newCredentials]);
+  await storage().writeProfile(tenant, profile);
+  await saveServices(tenant, [...existingServices, ...newServices]);
+  await saveServiceAreas(tenant, [...existingAreas, ...newAreas]);
+  await saveBrands(tenant, [...existingBrands, ...newBrands]);
+  await saveFaqs(tenant, [...existingFaqs, ...newFaqs]);
+  await saveCredentials(tenant, [...existingCredentials, ...newCredentials]);
 
   console.log(`  Written to content/.\n`);
   console.log(`  Nothing is approved or published yet. Review the files, set`);

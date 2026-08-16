@@ -1,19 +1,18 @@
 import "dotenv/config";
-import * as fs from "fs";
-import * as path from "path";
 import { crawlSite } from "./crawl";
 import type { Candidate, IntakeResult } from "./types";
-import { intakeDir, readSettings } from "../tenancy/store";
+import { readSettings } from "../tenancy/store";
+import { storage } from "../tenancy/storage";
 
 /**
  * Website intake.
  *
- *   npm run intake -- --site https://titanzplumbing.com
- *   npm run intake -- --site https://example.com --max-pages 15
+ *   npm run intake -- --tenant acme
+ *   npm run intake -- --tenant acme --site https://example.com --max-pages 15
  *
- * Writes candidates to content/intake/<domain>/website.json. Nothing is
- * approved and nothing is published — a human promotes candidates into the
- * business profile and the authored tables.
+ * Saves candidates against the client. Nothing is approved and nothing is
+ * published — a human promotes candidates into the business profile and the
+ * authored tables.
  */
 
 /**
@@ -101,8 +100,9 @@ async function main(): Promise<void> {
     return i !== -1 ? argv[i + 1] : undefined;
   };
 
-  const tenant = get("--tenant") ?? process.env.TENANT_SLUG ?? "titanz";
-  const settings = readSettings(tenant);
+  const tenant = get("--tenant") ?? process.env.TENANT_SLUG ?? "";
+  if (!tenant) throw new Error("No client. Pass --tenant, or set TENANT_SLUG.");
+  const settings = await readSettings(tenant);
   const site = get("--site") ?? (settings?.domain ? `https://${settings.domain}` : undefined);
   if (!site) {
     throw new Error("No site. Pass --site, or set a domain on the client.");
@@ -127,12 +127,9 @@ async function main(): Promise<void> {
 
   summarize(result);
 
-  const outDir = intakeDir(tenant);
-  fs.mkdirSync(outDir, { recursive: true });
-  const outFile = path.join(outDir, "website.json");
-  fs.writeFileSync(outFile, JSON.stringify(result, null, 2), "utf8");
+  await storage().writeIntake(tenant, "website", result);
 
-  console.log(`\n  Candidates written to ${outFile}`);
+  console.log(`\n  Candidates saved for ${tenant}.`);
   console.log(`\n  Nothing here is approved. Every value carries where it came from and`);
   console.log(`  how it was recognized, so it can be judged rather than trusted.\n`);
 }

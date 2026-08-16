@@ -1,10 +1,9 @@
 import "dotenv/config";
-import * as fs from "fs";
-import * as path from "path";
 import { parseJsonLdBlocks } from "../intake/jsonld";
 import { isBusinessNode, nodesOf } from "./verify-markup";
 import { loadProfile } from "../data/profile";
-import { intakeDir, readSettings } from "../tenancy/store";
+import { readSettings } from "../tenancy/store";
+import { storage } from "../tenancy/storage";
 import type { IntakeResult } from "../intake/types";
 
 /**
@@ -178,16 +177,6 @@ function bestCandidate(
   return best ? { value: best[0], method: best[1].method } : { value: "", method: "" };
 }
 
-function readIntake(tenant: string, file: string): IntakeResult | null {
-  const full = path.join(intakeDir(tenant), file);
-  if (!fs.existsSync(full)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(full, "utf8")) as IntakeResult;
-  } catch {
-    return null;
-  }
-}
-
 function fromEntity(entity: IntakeResult["entity"]): Partial<Record<NapField, Picked>> {
   return {
     name: bestCandidate(entity.name),
@@ -256,7 +245,7 @@ const FIELDS: { field: NapField; severity: "high" | "medium" }[] = [
 ];
 
 export async function auditNap(tenant: string, options?: { skipLive?: boolean }): Promise<NapReport> {
-  const settings = readSettings(tenant);
+  const settings = await readSettings(tenant);
   if (!settings) throw new Error(`No client "${tenant}".`);
 
   const notes: string[] = [];
@@ -268,7 +257,7 @@ export async function auditNap(tenant: string, options?: { skipLive?: boolean })
   }
   const collected: Collected[] = [];
 
-  const profile = loadProfile(tenant);
+  const profile = await loadProfile(tenant);
   if (profile) {
     // Never independent. The profile is the claim being checked, not evidence
     // for it.
@@ -301,14 +290,14 @@ export async function auditNap(tenant: string, options?: { skipLive?: boolean })
     }
   }
 
-  const website = readIntake(tenant, "website.json");
+  const website = (await storage().readIntake(tenant, "website")) as IntakeResult | null;
   if (website) {
     collected.push({ source: "website crawl", independent: true, values: fromEntity(website.entity) });
   } else {
     notes.push("No website crawl yet, so the site's own details were not compared.");
   }
 
-  const places = readIntake(tenant, "places.json");
+  const places = (await storage().readIntake(tenant, "places")) as IntakeResult | null;
   if (places) {
     collected.push({ source: "Google", independent: true, values: fromEntity(places.entity) });
   } else {

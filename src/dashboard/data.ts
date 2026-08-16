@@ -72,8 +72,8 @@ function summarize(key: string, label: string, items: ReviewItem[]): ReviewSecti
   };
 }
 
-export function buildDashboardData(tenant: string): DashboardData {
-  const profile = loadProfile(tenant);
+export async function buildDashboardData(tenant: string): Promise<DashboardData> {
+  const profile = await loadProfile(tenant);
   const validation = profile
     ? validateProfile(profile)
     : { blocking: ["no business profile"], missing: [] };
@@ -95,7 +95,7 @@ export function buildDashboardData(tenant: string): DashboardData {
       ]
     : [];
 
-  const services = loadServices(tenant).map<ReviewItem>((item) => ({
+  const services = (await loadServices(tenant)).map<ReviewItem>((item) => ({
     primary: item.name,
     secondary: item.category,
     approved: item.approved,
@@ -104,7 +104,7 @@ export function buildDashboardData(tenant: string): DashboardData {
     note: null,
   }));
 
-  const areas = loadServiceAreas(tenant).map<ReviewItem>((item) => ({
+  const areas = (await loadServiceAreas(tenant)).map<ReviewItem>((item) => ({
     primary: item.name,
     secondary: item.zips.length > 0 ? item.zips.join(", ") : null,
     approved: item.approved,
@@ -114,7 +114,7 @@ export function buildDashboardData(tenant: string): DashboardData {
     note: item.zips.length === 0 ? "no ZIP codes" : null,
   }));
 
-  const brands = loadBrands(tenant).map<ReviewItem>((item) => ({
+  const brands = (await loadBrands(tenant)).map<ReviewItem>((item) => ({
     primary: item.name,
     secondary: null,
     approved: item.approved,
@@ -123,7 +123,7 @@ export function buildDashboardData(tenant: string): DashboardData {
     note: null,
   }));
 
-  const faqs = loadFaqs(tenant).map<ReviewItem>((item) => ({
+  const faqs = (await loadFaqs(tenant)).map<ReviewItem>((item) => ({
     primary: item.question,
     secondary: item.answer,
     approved: item.approved,
@@ -132,7 +132,7 @@ export function buildDashboardData(tenant: string): DashboardData {
     note: null,
   }));
 
-  const credentials = loadCredentials(tenant).map<ReviewItem>((item) => ({
+  const credentials = (await loadCredentials(tenant)).map<ReviewItem>((item) => ({
     primary: item.title,
     secondary: item.identifier,
     approved: item.approved,

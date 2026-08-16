@@ -20,7 +20,8 @@
     "audit:nap": "tsx src/audit/nap.ts",
     "audit:directories": "tsx src/audit/directory-presence.ts",
     "generate:faqs": "tsx src/content/generate-faqs.ts",
-    "docs:check": "tsx scripts/check-docs.ts"
+    "docs:check": "tsx scripts/check-docs.ts",
+    "content:migrate": "tsx scripts/migrate-to-supabase.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",

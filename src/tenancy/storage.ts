@@ -58,7 +58,21 @@ export interface Storage {
 
   readIntake(slug: string, source: IntakeSource): Promise<Record<string, unknown> | null>;
   writeIntake(slug: string, source: IntakeSource, result: unknown): Promise<void>;
-  listIntake(slug: string): Promise<{ source: IntakeSource; result: Record<string, unknown> }[]>;
+  /**
+   * Every source that has run, with when it ran.
+   *
+   * `ranAt` is what makes the Sources view honest — a crawl from March
+   * presented without a date reads as current, and the whole point of the view
+   * is knowing whether the candidates on screen are stale.
+   */
+  listIntake(slug: string): Promise<IntakeRun[]>;
+}
+
+export interface IntakeRun {
+  source: IntakeSource;
+  result: Record<string, unknown>;
+  /** ISO timestamp, or null when the store cannot say. */
+  ranAt: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -146,11 +160,13 @@ export class FileStorage implements Storage {
   async writeIntake(slug: string, source: IntakeSource, result: unknown) {
     this.write(path.join(this.dir(slug), "intake", `${source}.json`), result);
   }
-  async listIntake(slug: string) {
-    const out: { source: IntakeSource; result: Record<string, unknown> }[] = [];
+  async listIntake(slug: string): Promise<IntakeRun[]> {
+    const out: IntakeRun[] = [];
     for (const source of ["website", "places"] as IntakeSource[]) {
-      const result = await this.readIntake(slug, source);
-      if (result) out.push({ source, result });
+      const file = path.join(this.dir(slug), "intake", `${source}.json`);
+      const result = this.read(file);
+      if (!result) continue;
+      out.push({ source, result, ranAt: fs.statSync(file).mtime.toISOString() });
     }
     return out;
   }
@@ -607,16 +623,15 @@ export class SupabaseStorage implements Storage {
     });
   }
 
-  async listIntake(slug: string) {
+  async listIntake(slug: string): Promise<IntakeRun[]> {
     const id = await this.tenantId(slug);
     if (!id) return [];
 
-    const rows = (await this.rest(`intake_runs?tenant_id=eq.${id}&select=source,result`)) as {
-      source: IntakeSource;
-      result: Record<string, unknown>;
-    }[];
+    const rows = (await this.rest(
+      `intake_runs?tenant_id=eq.${id}&select=source,result,ran_at&order=source`
+    )) as { source: IntakeSource; result: Record<string, unknown>; ran_at: string }[];
 
-    return rows;
+    return rows.map((row) => ({ source: row.source, result: row.result, ranAt: row.ran_at }));
   }
 }
 
@@ -630,14 +645,34 @@ let active: Storage | null = null;
  * Supabase when configured, files otherwise. Chosen once so a single run cannot
  * read from one and write to the other, which would split a client's data in
  * half with no error anywhere.
+ *
+ * `CONTENT_STORE=files` forces the file store even with Supabase configured.
+ * That is the fallback for working offline, and — more usefully — for a machine
+ * whose .env points at production: without it, having the keys present is
+ * enough to silently move every read and write onto the live database.
  */
 export function storage(): Storage {
   if (active) return active;
 
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const forced = process.env.CONTENT_STORE?.trim().toLowerCase();
 
-  active = url && key ? new SupabaseStorage(url, key) : new FileStorage();
+  if (forced === "files") {
+    active = new FileStorage();
+  } else if (forced === "supabase") {
+    if (!url || !key) {
+      throw new Error(
+        "CONTENT_STORE=supabase but SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is missing.\n" +
+          "  Refusing to fall back to files — that would write a client's data somewhere\n" +
+          "  nobody is looking for it."
+      );
+    }
+    active = new SupabaseStorage(url, key);
+  } else {
+    active = url && key ? new SupabaseStorage(url, key) : new FileStorage();
+  }
+
   return active;
 }
 

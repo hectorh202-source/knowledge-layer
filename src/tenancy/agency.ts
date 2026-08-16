@@ -136,7 +136,7 @@ async function provision(user: { id: string; email: string }): Promise<Agency> {
   });
 
   if (isFirst) {
-    const unclaimed = listTenantSlugs();
+    const unclaimed = await listTenantSlugs();
     if (unclaimed.length > 0) {
       await query(`agency_clients`, {
         method: "POST",

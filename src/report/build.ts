@@ -133,10 +133,10 @@ const CHECK_COPY: Record<string, { label: string; detail: string }> = {
 };
 
 export async function buildReport(tenant: string): Promise<ClientReport> {
-  const settings = readSettings(tenant);
+  const settings = await readSettings(tenant);
   if (!settings) throw new Error(`No client "${tenant}".`);
 
-  const profile = loadProfile(tenant);
+  const profile = await loadProfile(tenant);
   const validation = profile ? validateProfile(profile) : { blocking: ["no profile"], missing: [] };
 
   const approved = <T extends { approved: boolean; published?: boolean }>(items: T[]): T[] =>
@@ -148,9 +148,9 @@ export async function buildReport(tenant: string): Promise<ClientReport> {
     auditNap(tenant).catch(() => null),
     verifyMarkup(tenant).catch(() => null),
   ]);
-  const directories: DirectoryReport = auditDirectories(tenant);
+  const directories: DirectoryReport = await auditDirectories(tenant);
 
-  const tier1 = readTier1(tenant);
+  const tier1 = await readTier1(tenant);
   const stored = tier1.report as
     | { ranAt?: string; checks?: { id: string; label: string; state: string; detail?: string }[] }
     | null;
@@ -219,10 +219,10 @@ export async function buildReport(tenant: string): Promise<ClientReport> {
     published: {
       markup: markup?.status ?? "missing",
       markupUrl: markup?.url ?? `https://${settings.domain}`,
-      services: approved(loadServices(tenant)).length,
-      areas: approved(loadServiceAreas(tenant)).length,
-      questions: approved(loadFaqs(tenant)).length,
-      credentials: approved(loadCredentials(tenant)).length,
+      services: approved(await loadServices(tenant)).length,
+      areas: approved(await loadServiceAreas(tenant)).length,
+      questions: approved(await loadFaqs(tenant)).length,
+      credentials: approved(await loadCredentials(tenant)).length,
       openDays: profile ? profile.hours.filter((h) => !h.isClosed).length : 0,
     },
 

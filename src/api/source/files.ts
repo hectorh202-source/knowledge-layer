@@ -37,7 +37,7 @@ export class FileSource implements KnowledgeSource {
   }
 
   async business(): Promise<BusinessDto | null> {
-    const profile = loadProfile(this.tenant);
+    const profile = await loadProfile(this.tenant);
     if (!profile) return null;
 
     // Without a name, phone, and city there is no resolvable entity, and
@@ -59,7 +59,7 @@ export class FileSource implements KnowledgeSource {
   }
 
   async services(): Promise<ServiceDto[]> {
-    return servable(loadServices(this.tenant), this.includeUnreviewed).map((service) => ({
+    return servable(await loadServices(this.tenant), this.includeUnreviewed).map((service) => ({
       name: service.name,
       category: service.category,
       description: service.description,
@@ -67,7 +67,7 @@ export class FileSource implements KnowledgeSource {
   }
 
   async serviceAreas(): Promise<ServiceAreaDto[]> {
-    return servable(loadServiceAreas(this.tenant), this.includeUnreviewed).map((area) => ({
+    return servable(await loadServiceAreas(this.tenant), this.includeUnreviewed).map((area) => ({
       name: area.name,
       zips: area.zips,
       cities: [area.name],
@@ -75,11 +75,11 @@ export class FileSource implements KnowledgeSource {
   }
 
   async brands(): Promise<BrandDto[]> {
-    return servable(loadBrands(this.tenant), this.includeUnreviewed).map((brand) => ({ name: brand.name }));
+    return servable(await loadBrands(this.tenant), this.includeUnreviewed).map((brand) => ({ name: brand.name }));
   }
 
   async faqs(): Promise<FaqDto[]> {
-    return servable(loadFaqs(this.tenant), this.includeUnreviewed).map((faq) => ({
+    return servable(await loadFaqs(this.tenant), this.includeUnreviewed).map((faq) => ({
       question: faq.question,
       answer: faq.answer,
       service: null,
@@ -87,7 +87,7 @@ export class FileSource implements KnowledgeSource {
   }
 
   async credentials(): Promise<CredentialDto[]> {
-    return servable(loadCredentials(this.tenant), this.includeUnreviewed)
+    return servable(await loadCredentials(this.tenant), this.includeUnreviewed)
       // A lapsed license published as current is a compliance claim that
       // stopped being true.
       .filter(isCurrent)

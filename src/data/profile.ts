@@ -1,5 +1,4 @@
-import * as fs from "fs";
-import { profilePath } from "../tenancy/store";
+import { storage } from "../tenancy/storage";
 export interface PostalAddress {
   street: string | null;
   city: string | null;
@@ -378,14 +377,13 @@ function parseSameAs(raw: unknown): string[] {
   return out;
 }
 
-export function profileExists(tenant: string): boolean {
-  return fs.existsSync(profilePath(tenant));
+export async function profileExists(tenant: string): Promise<boolean> {
+  return (await storage().readProfile(tenant)) !== null;
 }
 
-export function loadProfile(tenant: string): BusinessProfile | null {
-  if (!profileExists(tenant)) return null;
-
-  const raw = JSON.parse(fs.readFileSync(profilePath(tenant), "utf8")) as Record<string, unknown>;
+export async function loadProfile(tenant: string): Promise<BusinessProfile | null> {
+  const raw = await storage().readProfile(tenant);
+  if (!raw) return null;
 
   return {
     name: str(raw.name) ?? "",
@@ -489,15 +487,17 @@ export function validateProfile(profile: BusinessProfile): ProfileValidation {
 }
 
 /** Raw profile JSON, for the editor — placeholders and all. */
-export function loadProfileRaw(tenant: string): Record<string, unknown> {
-  if (!profileExists(tenant)) return {};
+export async function loadProfileRaw(tenant: string): Promise<Record<string, unknown>> {
   try {
-    return JSON.parse(fs.readFileSync(profilePath(tenant), "utf8")) as Record<string, unknown>;
+    return (await storage().readProfile(tenant)) ?? {};
   } catch {
     return {};
   }
 }
 
-export function saveProfileRaw(tenant: string, raw: Record<string, unknown>): void {
-  fs.writeFileSync(profilePath(tenant), JSON.stringify(raw, null, 2) + "\n", "utf8");
+export async function saveProfileRaw(
+  tenant: string,
+  raw: Record<string, unknown>
+): Promise<void> {
+  await storage().writeProfile(tenant, raw);
 }

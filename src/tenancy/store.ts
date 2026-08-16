@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import { storage } from "./storage";
 
 /**
  * Per-tenant storage.
@@ -172,83 +173,52 @@ export function intakeDir(slug: string): string {
   return path.join(tenantDir(slug), "intake");
 }
 
-export function tenantExists(slug: string): boolean {
-  return fs.existsSync(settingsPath(slug));
+export async function tenantExists(slug: string): Promise<boolean> {
+  return storage().tenantExists(slug);
 }
 
-export function listTenantSlugs(): string[] {
-  if (!fs.existsSync(TENANTS_DIR)) return [];
-  return fs
-    .readdirSync(TENANTS_DIR, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && tenantExists(entry.name))
-    .map((entry) => entry.name)
-    .sort();
+export async function listTenantSlugs(): Promise<string[]> {
+  return storage().listTenants();
 }
 
-/** Raw profile read, kept local so store.ts stays free of a circular import. */
-function readProfileFields(slug: string): { name: string; domain: string; schemaType: string } {
-  try {
-    const raw = JSON.parse(fs.readFileSync(profilePath(slug), "utf8")) as Record<string, unknown>;
-    return {
-      name: typeof raw.name === "string" ? raw.name : "",
-      domain: typeof raw.domain === "string" ? raw.domain : "",
-      schemaType: typeof raw.schemaType === "string" ? raw.schemaType : "LocalBusiness",
-    };
-  } catch {
-    return { name: "", domain: "", schemaType: "LocalBusiness" };
-  }
+export async function readSettings(slug: string): Promise<TenantSettings | null> {
+  const store = storage();
+  const parsed = (await store.readSettings(slug)) as TenantSettings | null;
+  if (!parsed) return null;
+
+  // name, domain and schemaType are read from the profile, never from settings.
+  // They were once stored in both and drifted — renaming in Settings relabelled
+  // the nav while the published markup kept the old name.
+  const profile = (await store.readProfile(slug)) ?? {};
+  const str = (value: unknown): string => (typeof value === "string" ? value : "");
+
+  return {
+    ...parsed,
+    // Backfill so settings written before a field existed still load.
+    sources: { ...EMPTY_SOURCES, ...(parsed.sources ?? {}) },
+    links: { ...EMPTY_LINKS, ...(parsed.links ?? {}) },
+    slug,
+    name: str(profile.name) || parsed.name || "",
+    domain: str(profile.domain) || parsed.domain || "",
+    schemaType: str(profile.schemaType) || parsed.schemaType || "LocalBusiness",
+  };
 }
 
-function writeProfileFields(slug: string, fields: Partial<Record<string, unknown>>): void {
-  let raw: Record<string, unknown> = {};
-  try {
-    raw = JSON.parse(fs.readFileSync(profilePath(slug), "utf8")) as Record<string, unknown>;
-  } catch {
-    raw = {};
-  }
-  fs.mkdirSync(tenantDir(slug), { recursive: true });
-  fs.writeFileSync(profilePath(slug), JSON.stringify({ ...raw, ...fields }, null, 2) + "\n", "utf8");
-}
+export async function writeSettings(settings: TenantSettings): Promise<void> {
+  const store = storage();
 
-export function readSettings(slug: string): TenantSettings | null {
-  if (!tenantExists(slug)) return null;
-  try {
-    const parsed = JSON.parse(fs.readFileSync(settingsPath(slug), "utf8")) as TenantSettings;
-    const profile = readProfileFields(slug);
-
-    return {
-      ...parsed,
-      // Backfill so settings files written before a field existed still load.
-      sources: { ...EMPTY_SOURCES, ...(parsed.sources ?? {}) },
-      links: { ...EMPTY_LINKS, ...(parsed.links ?? {}) },
-      // The profile wins. A settings.json still carrying these from before the
-      // consolidation is stale by definition.
-      name: profile.name || parsed.name || "",
-      domain: profile.domain || parsed.domain || "",
-      schemaType: profile.schemaType || parsed.schemaType || "LocalBusiness",
-    };
-  } catch {
-    return null;
-  }
-}
-
-export function writeSettings(settings: TenantSettings): void {
-  fs.mkdirSync(tenantDir(settings.slug), { recursive: true });
-
-  // Route the three shared fields to the profile, and keep them out of
-  // settings.json entirely so there is nothing left to drift.
-  writeProfileFields(settings.slug, {
+  // The three shared fields go to the profile, and are kept out of settings
+  // entirely so there is nothing left to drift.
+  const profile = (await store.readProfile(settings.slug)) ?? {};
+  await store.writeProfile(settings.slug, {
+    ...profile,
     name: settings.name,
     domain: settings.domain,
     schemaType: settings.schemaType,
   });
 
   const { name, domain, schemaType, ...operational } = settings;
-  fs.writeFileSync(
-    settingsPath(settings.slug),
-    JSON.stringify(operational, null, 2) + "\n",
-    "utf8"
-  );
+  await store.writeSettings(settings.slug, operational);
 }
 
 const EMPTY_PROFILE = {
@@ -301,15 +271,18 @@ const EMPTY_PROFILE = {
  * A new client that starts with invented defaults is a client whose data
  * nobody trusts.
  */
-export function createTenant(input: {
+export async function createTenant(input: {
   name: string;
   domain: string;
   slug?: string;
   schemaType?: string;
-}): TenantSettings {
+}): Promise<TenantSettings> {
+  const store = storage();
   const slug = slugify(input.slug || input.name);
   if (!slug) throw new Error("Could not derive a slug from that name.");
-  if (tenantExists(slug)) throw new Error(`A client with slug "${slug}" already exists.`);
+  if (await store.tenantExists(slug)) {
+    throw new Error(`A client with slug "${slug}" already exists.`);
+  }
 
   const domain = input.domain
     .trim()
@@ -321,9 +294,10 @@ export function createTenant(input: {
   // for the same site — a crawler would have no way to tell which is
   // authoritative. The slug check above won't catch it, since slugs come from
   // the business name.
-  const clash = listTenantSlugs()
-    .map(readSettings)
-    .find((existing) => existing?.domain && existing.domain.toLowerCase() === domain.toLowerCase());
+  const existing = await Promise.all((await listTenantSlugs()).map(readSettings));
+  const clash = existing.find(
+    (other) => other?.domain && other.domain.toLowerCase() === domain.toLowerCase()
+  );
 
   if (clash) {
     throw new Error(`"${clash.name}" already uses ${domain}. One client per domain.`);
@@ -341,32 +315,30 @@ export function createTenant(input: {
     notes: "",
   };
 
-  fs.mkdirSync(tenantDir(slug), { recursive: true });
+  await store.createTenant(slug);
 
-  // Profile first. writeSettings now writes name, domain and schemaType *into*
-  // the profile, so creating the empty profile afterwards would erase them.
-  fs.writeFileSync(
-    profilePath(slug),
-    JSON.stringify(
-      { ...EMPTY_PROFILE, name: settings.name, domain, schemaType: settings.schemaType },
-      null,
-      2
-    ) + "\n",
-    "utf8"
-  );
+  // Profile first. writeSettings writes name, domain and schemaType *into* the
+  // profile, so creating the empty profile afterwards would erase them.
+  await store.writeProfile(slug, {
+    ...EMPTY_PROFILE,
+    name: settings.name,
+    domain,
+    schemaType: settings.schemaType,
+  });
 
-  writeSettings(settings);
+  await writeSettings(settings);
 
   for (const kind of CONTENT_KINDS) {
-    fs.writeFileSync(contentPath(slug, kind), JSON.stringify({ items: [] }, null, 2) + "\n", "utf8");
+    await store.writeContent(slug, kind, []);
   }
 
   return settings;
 }
 
-export function deleteTenant(slug: string): void {
-  if (!tenantExists(slug)) throw new Error(`No client "${slug}".`);
-  fs.rmSync(tenantDir(slug), { recursive: true, force: true });
+export async function deleteTenant(slug: string): Promise<void> {
+  const store = storage();
+  if (!(await store.tenantExists(slug))) throw new Error(`No client "${slug}".`);
+  await store.deleteTenant(slug);
 }
 
 /**
@@ -374,28 +346,30 @@ export function deleteTenant(slug: string): void {
  *
  * Runs once, on startup. Without it the content already gathered for the first
  * client would be stranded in the old location.
+ *
+ * Deliberately talks to the filesystem directly rather than through `storage()`:
+ * it is a file-layout migration, moving files that only ever existed on disk
+ * into the place the file store expects them. Run against Supabase it is a
+ * no-op, which is correct — a database that never had the old layout has
+ * nothing to migrate.
  */
-export function migrateLegacyContent(slug = "titanz"): boolean {
+export function migrateLegacyContent(slug: string): boolean {
   const legacyProfile = path.join(LEGACY_DIR, "business-profile.json");
-  if (!fs.existsSync(legacyProfile) || tenantExists(slug)) return false;
+  if (!fs.existsSync(legacyProfile) || fs.existsSync(tenantDir(slug))) return false;
 
   fs.mkdirSync(tenantDir(slug), { recursive: true });
 
-  const raw = JSON.parse(fs.readFileSync(legacyProfile, "utf8")) as Record<string, unknown>;
-  const name = typeof raw.name === "string" && raw.name ? raw.name : slug;
-  const domain = typeof raw.domain === "string" ? raw.domain : "";
-
-  writeSettings({
+  // No name/domain here: they live in the legacy profile, which is moved into
+  // place below, and settings has not stored them since the two copies drifted.
+  const settings = {
     slug,
-    name,
-    domain,
-    schemaType: "LocalBusiness",
     apiBaseUrl: "",
     sources: { ...EMPTY_SOURCES },
     links: { ...EMPTY_LINKS },
     createdAt: new Date().toISOString(),
     notes: "Migrated from the single-client layout.",
-  });
+  };
+  fs.writeFileSync(settingsPath(slug), JSON.stringify(settings, null, 2) + "\n", "utf8");
 
   fs.renameSync(legacyProfile, profilePath(slug));
 
@@ -412,33 +386,12 @@ export function migrateLegacyContent(slug = "titanz"): boolean {
 }
 
 /** Reads a content file's items. */
-export function readItems<T>(slug: string, kind: ContentKind): T[] {
-  const file = contentPath(slug, kind);
-  if (!fs.existsSync(file)) return [];
-  try {
-    const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as { items?: T[] };
-    return parsed.items ?? [];
-  } catch {
-    return [];
-  }
+export async function readItems<T>(slug: string, kind: ContentKind): Promise<T[]> {
+  return (await storage().readContent(slug, kind)) as T[];
 }
 
-/** Writes a content file, preserving any existing header comment. */
-export function writeItems<T>(slug: string, kind: ContentKind, items: T[]): void {
-  const file = contentPath(slug, kind);
-  let comment: string[] | undefined;
-
-  if (fs.existsSync(file)) {
-    try {
-      comment = (JSON.parse(fs.readFileSync(file, "utf8")) as { _comment?: string[] })._comment;
-    } catch {
-      // Unreadable file gets replaced rather than blocking the write.
-    }
-  }
-
-  fs.mkdirSync(tenantDir(slug), { recursive: true });
-  const payload = comment ? { _comment: comment, items } : { items };
-  fs.writeFileSync(file, JSON.stringify(payload, null, 2) + "\n", "utf8");
+export async function writeItems<T>(slug: string, kind: ContentKind, items: T[]): Promise<void> {
+  await storage().writeContent(slug, kind, items as unknown[]);
 }
 
 // --- Tier 1 audit state ----------------------------------------------------
@@ -454,18 +407,10 @@ export interface Tier1State {
   manual: Record<string, { checked: boolean; note: string; updatedAt: string }>;
 }
 
-export function readTier1(slug: string): Tier1State {
-  const file = auditPath(slug);
-  if (!fs.existsSync(file)) return { report: null, manual: {} };
-  try {
-    const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as Partial<Tier1State>;
-    return { report: parsed.report ?? null, manual: parsed.manual ?? {} };
-  } catch {
-    return { report: null, manual: {} };
-  }
+export async function readTier1(slug: string): Promise<Tier1State> {
+  return (await storage().readTier1(slug)) as Tier1State;
 }
 
-export function writeTier1(slug: string, state: Tier1State): void {
-  fs.mkdirSync(tenantDir(slug), { recursive: true });
-  fs.writeFileSync(auditPath(slug), JSON.stringify(state, null, 2) + "\n", "utf8");
+export async function writeTier1(slug: string, state: Tier1State): Promise<void> {
+  await storage().writeTier1(slug, state);
 }

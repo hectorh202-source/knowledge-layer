@@ -21,14 +21,14 @@ import { listTenantSlugs, profilePath, tenantDir } from "../src/tenancy/store";
 
 const FIELDS = ["name", "domain", "schemaType"] as const;
 
-function main(): void {
+async function main(): Promise<void> {
   const dryRun = process.argv.includes("--dry-run");
 
   process.stdout.write(`\nMigrating profile-owned fields out of settings.json\n`);
   if (dryRun) process.stdout.write(`  DRY RUN — nothing will be written\n`);
   process.stdout.write("\n");
 
-  for (const slug of listTenantSlugs()) {
+  for (const slug of await listTenantSlugs()) {
     const settingsFile = path.join(tenantDir(slug), "settings.json");
     if (!fs.existsSync(settingsFile)) continue;
 
@@ -86,4 +86,7 @@ function main(): void {
   process.stdout.write(dryRun ? `\nDry run complete.\n\n` : `\nDone.\n\n`);
 }
 
-main();
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

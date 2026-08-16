@@ -30,7 +30,7 @@ import { agenciesEnabled, agencyFor, isPlatformAdmin } from "../tenancy/agency";
  * Auth. Accounts are created in the Supabase dashboard; there is no signup here.
  */
 
-function main(): void {
+async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const get = (flag: string): string | undefined => {
     const i = argv.indexOf(flag);
@@ -64,7 +64,11 @@ function main(): void {
     );
   }
 
-  const migrated = migrateLegacyContent();
+  // One-shot rescue of the pre-tenancy layout, for a checkout that still has
+  // content/business-profile.json at the top level. Opt-in by slug so nothing
+  // hardcodes a client name.
+  const legacySlug = process.env.LEGACY_MIGRATION_SLUG?.trim();
+  const migrated = legacySlug ? migrateLegacyContent(legacySlug) : false;
 
   const app = express();
   app.disable("x-powered-by");
@@ -158,10 +162,12 @@ function main(): void {
 
   app.use((_req: Request, res: Response) => res.status(404).json({ error: "not_found" }));
 
+  const clientCount = (await listTenantSlugs()).length;
+
   app.listen(port, host, () => {
     console.log(`\nKnowledge Layer — admin portal`);
     console.log(`  http://localhost:${port}`);
-    console.log(`  clients : ${listTenantSlugs().length}`);
+    console.log(`  clients : ${clientCount}`);
     if (migrated) {
       console.log(`\n  Migrated the previous single-client content into content/tenants/titanz/.`);
     }
@@ -173,9 +179,7 @@ function main(): void {
   });
 }
 
-try {
-  main();
-} catch (error) {
+main().catch((error) => {
   console.error(`\n${error instanceof Error ? error.message : error}\n`);
   process.exit(1);
-}
+});

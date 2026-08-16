@@ -261,19 +261,19 @@ async function main(): Promise<void> {
   const tenant = get("--tenant") ?? process.env.TENANT_SLUG ?? "";
   const dryRun = argv.includes("--dry-run");
 
-  const settings = readSettings(tenant);
+  const settings = await readSettings(tenant);
   if (!settings) throw new Error(`No client "${tenant}". Create it in the portal first.`);
 
-  const profile = loadProfile(tenant);
+  const profile = await loadProfile(tenant);
   if (!profile) throw new Error(`Client "${tenant}" has no business profile.`);
 
   const approved = <T extends { approved: boolean }>(items: T[]): T[] =>
     items.filter((item) => item.approved);
 
-  const brands = approved(loadBrands(tenant)).map((brand) => brand.name);
-  const areas = approved(loadServiceAreas(tenant)).map((area) => area.name);
-  const services = approved(loadServices(tenant)).map((service) => service.name);
-  const credentials = approved(loadCredentials(tenant)).map((credential) => ({
+  const brands = approved(await loadBrands(tenant)).map((brand) => brand.name);
+  const areas = approved(await loadServiceAreas(tenant)).map((area) => area.name);
+  const services = approved(await loadServices(tenant)).map((service) => service.name);
+  const credentials = approved(await loadCredentials(tenant)).map((credential) => ({
     title: credential.title,
     identifier: credential.identifier,
     kind: credential.kind,
@@ -302,7 +302,7 @@ async function main(): Promise<void> {
 
   // Never replace an existing question, however it got there. A hand-written
   // answer beats a generated one by definition.
-  const existing = loadFaqs(tenant);
+  const existing = await loadFaqs(tenant);
   const seen = new Set(existing.map((faq) => normalizeQuestion(faq.question)));
 
   const fresh = generated.filter((faq) => !seen.has(normalizeQuestion(faq.question)));
@@ -338,7 +338,7 @@ async function main(): Promise<void> {
     },
   }));
 
-  saveFaqs(tenant, [...existing, ...entries]);
+  await saveFaqs(tenant, [...existing, ...entries]);
 
   console.log(`  ${entries.length} FAQ(s) added, all unapproved.`);
   console.log(`  Read them before approving — an answer published in the business's`);

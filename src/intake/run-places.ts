@@ -1,9 +1,8 @@
 import "dotenv/config";
-import * as fs from "fs";
-import * as path from "path";
 import { detailsToIntake, fetchPlaceDetails, parsePlaceId } from "./places";
 import type { IntakeResult } from "./types";
-import { intakeDir, readSettings } from "../tenancy/store";
+import { readSettings } from "../tenancy/store";
+import { storage } from "../tenancy/storage";
 
 /**
  * Google Places intake.
@@ -45,7 +44,7 @@ async function main(): Promise<void> {
   };
 
   const tenant = get("--tenant") ?? process.env.TENANT_SLUG ?? "";
-  const settings = readSettings(tenant);
+  const settings = await readSettings(tenant);
   if (!settings) throw new Error(`No client "${tenant}". Create it in the portal first.`);
 
   const domain = get("--domain") ?? settings.domain;
@@ -61,11 +60,7 @@ async function main(): Promise<void> {
   }
 
   // The crawl writes place IDs it found in the site's markup.
-  const websiteFile = path.join(intakeDir(tenant), "website.json");
-  let websiteIntake: IntakeResult | null = null;
-  if (fs.existsSync(websiteFile)) {
-    websiteIntake = JSON.parse(fs.readFileSync(websiteFile, "utf8")) as IntakeResult;
-  }
+  const websiteIntake = (await storage().readIntake(tenant, "website")) as IntakeResult | null;
 
   const crawledIds = websiteIntake?.entity.placeId ?? [];
   // Only when the site agrees with itself. Several different IDs means a
@@ -133,12 +128,9 @@ async function main(): Promise<void> {
 
   for (const note of intake.notes) console.log(`  ! ${note}\n`);
 
-  const outDir = intakeDir(tenant);
-  fs.mkdirSync(outDir, { recursive: true });
-  const outFile = path.join(outDir, "places.json");
-  fs.writeFileSync(outFile, JSON.stringify(intake, null, 2), "utf8");
+  await storage().writeIntake(tenant, "places", intake);
 
-  console.log(`  Candidates written to ${outFile}`);
+  console.log(`  Candidates saved for ${tenant}.`);
   console.log(`  Now press Promote to move them into content.\n`);
 }
 
