@@ -203,7 +203,7 @@ const KINDS = {
 const SECTIONS = ["overview","discoverability","profile",...Object.keys(KINDS),"sources","publishing","settings"];
 const LABELS = {overview:"Overview",discoverability:"Discoverability",profile:"Business profile",sources:"Sources",publishing:"Publishing",settings:"Settings",...Object.fromEntries(Object.entries(KINDS).map(([k,v])=>[k,v.label]))};
 
-let clients = [], current = null, view = "clients", detail = null;
+let clients = [], current = null, view = "clients", detail = null, agency = null;
 
 /**
  * Where you are, kept in the URL.
@@ -248,7 +248,13 @@ async function api(path,opts){
   return body;
 }
 
-async function loadClients(){ clients = (await api("/clients")).clients; renderNav(); }
+async function loadClients(){
+  const r = await api("/clients");
+  clients = r.clients;
+  // Null when agencies are off — the local single-operator setup.
+  agency = r.agency || null;
+  renderNav();
+}
 
 async function openClient(slug,section){
   current = slug; view = validView(section) ? section : "overview";
@@ -266,7 +272,10 @@ function renderNav(){
   // clients and unusable at twenty — the section links, which are what you
   // actually navigate with, get pushed off the bottom.
   const active = clients.find(c=>c.slug===current);
-  let html = '<div class="navlabel">Client</div>';
+  // Whose clients these are. Invisible with one agency, essential with two —
+  // and worth showing before someone edits the wrong company's profile.
+  let html = agency ? '<div class="navlabel">'+esc(agency.name)+'</div>' : "";
+  html += '<div class="navlabel">Client</div>';
 
   if(active){
     html += '<button class="switcher" data-picker="1">'+

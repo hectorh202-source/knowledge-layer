@@ -1,7 +1,7 @@
 import { execFile } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
-import express, { type Request, type Response, type Router } from "express";
+import express, { type NextFunction, type Request, type Response, type Router } from "express";
 import {
   isCurrent,
   itemLabels,
@@ -19,6 +19,14 @@ import { auditNap } from "../audit/nap";
 import { auditDirectories } from "../audit/directory-presence";
 import { buildReport } from "../report/build";
 import { renderReport } from "../report/render";
+import {
+  agenciesEnabled,
+  claim,
+  mayAccess,
+  release,
+  slugsFor,
+  type Agency,
+} from "../tenancy/agency";
 import {
   CONTENT_KINDS,
   createTenant,
@@ -43,6 +51,11 @@ import {
  * different servers means a misconfigured route can't turn the public endpoint
  * into something that accepts writes.
  */
+
+/** A request that has been through the auth and agency middleware. */
+export interface AgencyRequest extends Request {
+  agency?: Agency | null;
+}
 
 function isContentKind(value: string): value is ContentKind {
   return (CONTENT_KINDS as string[]).includes(value);
@@ -206,35 +219,96 @@ export function createAdminRouter(): Router {
   const router = express.Router();
   router.use(express.json({ limit: "2mb" }));
 
-  // --- clients -------------------------------------------------------------
-
-  router.get("/clients", (_req: Request, res: Response) => {
-    const clients = listTenantSlugs()
-      .map(summarize)
-      .filter((entry): entry is TenantSummary => entry !== null);
-    res.json({ clients });
+  /**
+   * Every route carrying a :slug is checked against the caller's agency.
+   *
+   * Filtering the client list is cosmetic. This is the part that matters —
+   * without it, another agency's client is one guessed URL away, and the slugs
+   * are derived from business names so they are eminently guessable.
+   *
+   * A slug that exists but belongs to someone else returns 404 rather than 403:
+   * telling a stranger that a client exists but is not theirs is telling them
+   * something about a business they have no relationship with.
+   */
+  router.use("/clients/:slug", (req: AgencyRequest, res: Response, next: NextFunction) => {
+    void (async () => {
+      try {
+        if (!agenciesEnabled()) return next();
+        const allowed = await mayAccess(req.agency?.id ?? null, req.params.slug);
+        if (!allowed) {
+          res.status(404).json({ error: "not_found" });
+          return;
+        }
+        next();
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+      }
+    })();
   });
 
-  router.post("/clients", (req: Request, res: Response) => {
-    try {
-      const { name, domain, slug, schemaType } = req.body ?? {};
-      if (!name || typeof name !== "string") throw new Error("A business name is required.");
-      if (!domain || typeof domain !== "string") throw new Error("A domain is required.");
+  // --- clients -------------------------------------------------------------
 
-      const settings = createTenant({ name, domain, slug, schemaType });
-      res.status(201).json({ client: summarize(settings.slug) });
-    } catch (error) {
-      res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
-    }
+  router.get("/clients", (req: AgencyRequest, res: Response) => {
+    void (async () => {
+      try {
+        const visible = await slugsFor(req.agency?.id ?? null);
+        const clients = listTenantSlugs()
+          // Null means agencies are off, so everything is visible — the local
+          // single-operator setup this app was until today.
+          .filter((slug) => visible === null || visible.includes(slug))
+          .map(summarize)
+          .filter((entry): entry is TenantSummary => entry !== null);
+        res.json({ clients, agency: req.agency ?? null });
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+      }
+    })();
+  });
+
+  router.post("/clients", (req: AgencyRequest, res: Response) => {
+    void (async () => {
+      try {
+        const { name, domain, slug, schemaType } = req.body ?? {};
+        if (!name || typeof name !== "string") throw new Error("A business name is required.");
+        if (!domain || typeof domain !== "string") throw new Error("A domain is required.");
+
+        const settings = createTenant({ name, domain, slug, schemaType });
+
+        // Claim it before returning. A client created but unclaimed would be
+        // invisible to the person who just made it, and claimable by the next
+        // agency to guess its slug.
+        if (req.agency) {
+          try {
+            await claim(req.agency.id, settings.slug);
+          } catch (error) {
+            deleteTenant(settings.slug);
+            throw new Error(
+              `Created the client but could not assign it to your agency, so it was removed. ${
+                error instanceof Error ? error.message : String(error)
+              }`
+            );
+          }
+        }
+
+        res.status(201).json({ client: summarize(settings.slug) });
+      } catch (error) {
+        res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+      }
+    })();
   });
 
   router.delete("/clients/:slug", (req: Request, res: Response) => {
-    try {
-      deleteTenant(req.params.slug);
-      res.json({ ok: true });
-    } catch (error) {
-      res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
-    }
+    void (async () => {
+      try {
+        deleteTenant(req.params.slug);
+        // Release after the files are gone. Releasing first would leave an
+        // orphan folder that no agency owns and nobody can see.
+        await release(req.params.slug);
+        res.json({ ok: true });
+      } catch (error) {
+        res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+      }
+    })();
   });
 
   // --- one client ----------------------------------------------------------

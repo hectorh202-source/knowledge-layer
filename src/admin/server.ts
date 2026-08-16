@@ -12,6 +12,7 @@ import {
   type AuthedRequest,
 } from "./auth";
 import { listTenantSlugs, migrateLegacyContent } from "../tenancy/store";
+import { agenciesEnabled, agencyFor } from "../tenancy/agency";
 
 /**
  * The admin portal.
@@ -114,6 +115,29 @@ function main(): void {
   // --- everything below requires a session ---------------------------------
 
   if (authed) app.use(requireAuth);
+
+  /**
+   * Resolve the caller's agency once per request, before any route sees it.
+   *
+   * Doing it here rather than inside each handler means a route added later
+   * cannot forget to, and the slug guard inside the router can rely on it
+   * always being present.
+   */
+  if (authed && agenciesEnabled()) {
+    app.use((req: AuthedRequest & { agency?: unknown }, res: Response, next) => {
+      void (async () => {
+        try {
+          req.agency = req.user ? await agencyFor(req.user) : null;
+          next();
+        } catch (error) {
+          res.status(503).json({
+            error: "agency_unavailable",
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+      })();
+    });
+  }
 
   app.use("/admin/api", createAdminRouter());
 
