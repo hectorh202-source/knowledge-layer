@@ -378,6 +378,103 @@ export function extractHubTextItems(
   return items;
 }
 
+/**
+ * Items on a hub page identified by a shared URL pattern.
+ *
+ * The strongest signal on a hub page, and the one that needs neither link text
+ * nor the homepage comparison. Real items cluster — twelve links matching
+ * `/junk-removal-<city>` — while About, Careers and Contact share nothing.
+ *
+ * This is what handles two cases the other strategies miss. Image-only links
+ * (`<a href="/junk-removal-venice"><img …></a>`) carry no text to read, so the
+ * label comes from the slug instead. And items linked sitewide from a footer
+ * look like furniture to the homepage comparison, even though on an areas page
+ * they are exactly the content wanted.
+ */
+export function extractHubUrlCluster(
+  html: string,
+  url: string,
+  minCluster = 3
+): { name: string; href: string }[] {
+  const $ = cheerio.load(html);
+  const host = (() => {
+    try {
+      return new URL(url).hostname.replace(/^www\./, "").toLowerCase();
+    } catch {
+      return "";
+    }
+  })();
+
+  // slug tokens -> href, for every internal link with a single-segment path.
+  const entries: { tokens: string[]; href: string; text: string }[] = [];
+  const seen = new Set<string>();
+
+  $("a[href]").each((_, element) => {
+    let parsed: URL;
+    try {
+      parsed = new URL($(element).attr("href") ?? "", url);
+    } catch {
+      return;
+    }
+    if (parsed.hostname.replace(/^www\./, "").toLowerCase() !== host) return;
+
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    if (segments.length !== 1) return;
+
+    const slug = segments[0].toLowerCase();
+    if (seen.has(slug)) return;
+    seen.add(slug);
+
+    entries.push({
+      tokens: slug.split("-").filter(Boolean),
+      href: parsed.origin + parsed.pathname,
+      text: $(element).text().replace(/\s+/g, " ").trim(),
+    });
+  });
+
+  // Group by leading token — the cheapest proxy for "same kind of page".
+  const groups = new Map<string, typeof entries>();
+  for (const entry of entries) {
+    if (entry.tokens.length < 2) continue;
+    const key = entry.tokens[0];
+    groups.set(key, [...(groups.get(key) ?? []), entry]);
+  }
+
+  const cluster = [...groups.values()]
+    .filter((group) => group.length >= minCluster)
+    .sort((a, b) => b.length - a.length)[0];
+
+  if (!cluster) return [];
+
+  // Strip the tokens every member shares, so `/junk-removal-venice` reads as
+  // "Venice" rather than "Junk Removal Venice".
+  let shared = 0;
+  const first = cluster[0].tokens;
+  while (
+    shared < first.length - 1 &&
+    cluster.every((entry) => entry.tokens[shared] === first[shared])
+  ) {
+    shared++;
+  }
+
+  return cluster.flatMap((entry) => {
+    const rest = entry.tokens.slice(shared);
+    if (rest.length === 0) return [];
+
+    // The slug remainder is what distinguishes members of the cluster, so it
+    // names them consistently. Link text is a fallback: on a page mixing image
+    // links with text ones it produced "Venice" alongside
+    // "Sarasota Junk Removal" for the same kind of item.
+    const fromSlug = rest
+      .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
+      .join(" ");
+    const name = fromSlug || entry.text;
+    if (!name || name.length > 60) return [];
+
+    return [{ name, href: entry.href }];
+  });
+}
+
 /** Absolute, normalized hrefs on a page — used as the furniture baseline. */
 export function pageHrefs(html: string, url: string): Set<string> {
   const $ = cheerio.load(html);

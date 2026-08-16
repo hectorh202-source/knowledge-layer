@@ -12,6 +12,7 @@ import {
   extractFaqs,
   extractHubLinks,
   extractHubTextItems,
+  extractHubUrlCluster,
   extractMeta,
   extractServices,
   pageHrefs,
@@ -243,10 +244,21 @@ export async function crawlSite(options: CrawlOptions): Promise<IntakeResult> {
 
     // Links first, then plain-text runs — a list is often one or the other,
     // occasionally both.
+    // A hub page expresses its list one of three ways. Links unique to the page
+    // and plain-text runs are both page content, so they run together.
     const names = [
       ...extractHubLinks(page.html, hub.url, furniture, hub.kind).map((link) => link.name),
       ...extractHubTextItems(page.html, textFurniture),
     ];
+
+    // URL clustering is a fallback rather than a peer. It ignores the homepage
+    // comparison by design, which is what lets it see items linked sitewide
+    // from a footer — but that also means on a services page the biggest
+    // cluster is the footer's city links. Only reach for it when the page
+    // yielded nothing of its own.
+    if (names.length === 0) {
+      names.push(...extractHubUrlCluster(page.html, hub.url).map((link) => link.name));
+    }
 
     const links = [...new Set(names.map((name) => name.trim()))]
       .filter(Boolean)
