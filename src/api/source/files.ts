@@ -96,6 +96,7 @@ export class FileSource implements KnowledgeSource {
         title: credential.title,
         identifier: credential.identifier,
         issuer: credential.issuer,
+        validUntil: credential.validUntil,
       }));
   }
 }

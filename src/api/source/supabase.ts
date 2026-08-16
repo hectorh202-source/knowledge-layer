@@ -89,9 +89,8 @@ export class SupabaseSource implements KnowledgeSource {
           "postal_code, country, gbp_url, founded_year, primary_category, business_type, schema_type, same_as, " +
           "alternate_name, slogan, logo_url, image_urls, price_range, payment_accepted, " +
           "currencies_accepted, languages, geo_latitude, geo_longitude, has_map, " +
-          "number_of_employees, awards, member_of, founder, fax_number, contact_points, " +
-          "booking_url, special_hours, tax_id, vat_id, duns, lei_code, isic_v4, branch_code, " +
-          "attributes"
+          "number_of_employees, awards, member_of, founder, contact_points, " +
+          "booking_url, special_hours, attributes"
       )
       .eq("tenant_id", tenantId);
 
@@ -167,20 +166,12 @@ export class SupabaseSource implements KnowledgeSource {
       memberOf: strings(r.member_of),
       founder: text(r.founder),
 
-      faxNumber: text(r.fax_number),
       contactPoints: Array.isArray(r.contact_points)
         ? (r.contact_points as ContactPointEntry[])
         : [],
       bookingUrl: text(r.booking_url),
 
       specialHours: Array.isArray(r.special_hours) ? (r.special_hours as SpecialHours[]) : [],
-
-      taxID: text(r.tax_id),
-      vatID: text(r.vat_id),
-      duns: text(r.duns),
-      leiCode: text(r.lei_code),
-      isicV4: text(r.isic_v4),
-      branchCode: text(r.branch_code),
 
       attributes: Array.isArray(r.attributes) ? (r.attributes as AttributeEntry[]) : [],
 
@@ -275,6 +266,7 @@ export class SupabaseSource implements KnowledgeSource {
         title: String(row.title),
         identifier: text(row.identifier),
         issuer: text(row.issuer),
+        validUntil: text(row.valid_until),
       }));
   }
 }

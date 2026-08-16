@@ -94,7 +94,6 @@ const BUSINESS_SCHEMA = {
     awards: { type: "array", items: { type: "string" } },
     memberOf: { type: "array", items: { type: "string" }, description: "Trade associations" },
     founder: { type: ["string", "null"] },
-    faxNumber: { type: ["string", "null"] },
     contactPoints: {
       type: "array",
       items: {
@@ -120,12 +119,6 @@ const BUSINESS_SCHEMA = {
         },
       },
     },
-    taxID: { type: ["string", "null"] },
-    vatID: { type: ["string", "null"] },
-    duns: { type: ["string", "null"] },
-    leiCode: { type: ["string", "null"] },
-    isicV4: { type: ["string", "null"] },
-    branchCode: { type: ["string", "null"] },
     attributes: {
       type: "array",
       description: "Attributes with no schema.org property of their own",

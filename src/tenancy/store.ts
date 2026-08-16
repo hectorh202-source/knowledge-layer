@@ -285,18 +285,10 @@ const EMPTY_PROFILE = {
   memberOf: [] as string[],
   founder: null,
 
-  faxNumber: null,
   contactPoints: [] as unknown[],
   bookingUrl: null,
 
   specialHours: [] as unknown[],
-
-  taxID: null,
-  vatID: null,
-  duns: null,
-  leiCode: null,
-  isicV4: null,
-  branchCode: null,
 
   attributes: [] as unknown[],
 };

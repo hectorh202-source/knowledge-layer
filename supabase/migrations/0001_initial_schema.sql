@@ -107,20 +107,11 @@ create table business_profile (
   founder             text,
 
   -- Contact beyond the canonical NAP number.
-  fax_number        text,
   contact_points    jsonb not null default '[]',
   booking_url       text,
 
   -- Dated exceptions to the weekly hours.
   special_hours     jsonb not null default '[]',
-
-  -- Registration identifiers.
-  tax_id            text,
-  vat_id            text,
-  duns              text,
-  lei_code          text,
-  isic_v4           text,
-  branch_code       text,
 
   -- Google Business Profile attributes with no schema.org property of their
   -- own — "veteran-owned", "free estimates". Published as additionalProperty.

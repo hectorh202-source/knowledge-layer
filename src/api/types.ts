@@ -64,6 +64,15 @@ export interface CredentialDto {
   title: string;
   identifier: string | null;
   issuer: string | null;
+  /**
+   * ISO date the credential lapses, published as schema.org `expires`.
+   *
+   * Lapsed credentials are filtered out before they get here, so anything with
+   * a date is still valid. Publishing the date anyway is what lets a reader
+   * tell a licence that is current from one nobody has checked in three years —
+   * an undated claim and a stale one look identical.
+   */
+  validUntil: string | null;
 }
 
 export interface KnowledgeSource {

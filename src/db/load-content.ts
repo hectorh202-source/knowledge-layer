@@ -144,18 +144,10 @@ async function main(): Promise<void> {
       member_of: profile.memberOf,
       founder: profile.founder,
 
-      fax_number: profile.faxNumber,
       contact_points: profile.contactPoints,
       booking_url: profile.bookingUrl,
 
       special_hours: profile.specialHours,
-
-      tax_id: profile.taxID,
-      vat_id: profile.vatID,
-      duns: profile.duns,
-      lei_code: profile.leiCode,
-      isic_v4: profile.isicV4,
-      branch_code: profile.branchCode,
 
       attributes: profile.attributes,
       // Publishing is an explicit act — loading a draft must never make it live.

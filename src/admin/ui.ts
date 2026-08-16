@@ -332,7 +332,7 @@ function profileView(){
 
     '<div class="card"><div class="card-h"><h2>Location &amp; reach</h2></div><div class="card-b"><div class="cols2">'+
       f("geo.latitude","Latitude",g.latitude)+f("geo.longitude","Longitude",g.longitude)+
-      f("hasMap","Map URL",p.hasMap)+f("branchCode","Branch code",p.branchCode)+
+      f("hasMap","Map URL",p.hasMap)+
     '</div>'+
     list("languages","Languages",p.languages,"One per line — English, Spanish")+
     '<div class="sub" style="margin:.2rem 0 0">Coordinates publish for every business type, including service-area. Unlike a street address they expose no doorstep when set to the middle '+
@@ -353,9 +353,7 @@ function profileView(){
         esc((p.attributes||[]).map(a=>a.value&&a.value!=="Yes"?a.name+" = "+a.value:a.name).join("\n"))+'</textarea>'+
     '</div></div>'+
 
-    '<div class="card"><div class="card-h"><h2>Additional contacts</h2></div><div class="card-b"><div class="cols2">'+
-      f("faxNumber","Fax",p.faxNumber)+
-    '</div>'+
+    '<div class="card"><div class="card-h"><h2>Additional contacts</h2></div><div class="card-b">'+
       '<div class="sub">Extra lines beyond the canonical NAP number, typed so a crawler knows which is which.</div>'+
       '<textarea data-p="contactPoints" placeholder="One per line: type | phone | email &mdash; e.g. emergency | 941-555-0100 |">'+
         esc((p.contactPoints||[]).map(c=>[c.contactType,c.phone||"",c.email||""].join(" | ")).join("\n"))+'</textarea>'+
@@ -367,12 +365,6 @@ function profileView(){
       '<textarea data-p="specialHours" placeholder="One per line: 2026-12-25 | closed &nbsp;or&nbsp; 2026-12-24 | 08:00 | 12:00">'+
         esc((p.specialHours||[]).map(h=>h.isClosed?h.date+" | closed":[h.date,h.opens,h.closes].join(" | ")).join("\n"))+'</textarea>'+
     '</div></div>'+
-
-    '<div class="card"><div class="card-h"><h2>Registration identifiers</h2><span class="meta">rarely needed</span></div><div class="card-b"><div class="cols2">'+
-      f("taxID","Tax ID / EIN",p.taxID)+f("vatID","VAT ID",p.vatID)+
-      f("duns","D-U-N-S",p.duns)+f("leiCode","LEI",p.leiCode)+
-      f("isicV4","ISIC v4",p.isicV4)+
-    '</div><div class="sub" style="margin:.2rem 0 0">Published if set. Most home-services businesses leave these blank.</div></div></div>'+
 
     '<button class="btn primary" id="saveProfile">Save profile</button>';
 }

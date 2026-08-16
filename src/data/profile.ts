@@ -161,7 +161,6 @@ export interface BusinessProfile {
   founder: string | null;
 
   // --- contact -------------------------------------------------------------
-  faxNumber: string | null;
   contactPoints: ContactPointEntry[];
   /** Online booking, emitted as a ReserveAction rather than a bare link. */
   bookingUrl: string | null;
@@ -169,16 +168,12 @@ export interface BusinessProfile {
   // --- hours exceptions ----------------------------------------------------
   specialHours: SpecialHours[];
 
-  // --- registration identifiers -------------------------------------------
-  /** EIN in the US. */
-  taxID: string | null;
-  vatID: string | null;
-  duns: string | null;
-  leiCode: string | null;
-  /** ISIC Rev.4 industry code. */
-  isicV4: string | null;
-  /** Branch identifier, for a business with more than one location. */
-  branchCode: string | null;
+  // Registration identifiers — taxID, vatID, duns, leiCode, isicV4, branchCode
+  // — and faxNumber were built here and removed. All are valid schema.org, and
+  // none of them answers any question a person asks an assistant about a
+  // plumber. Six form fields, six columns and six emit branches for facts no
+  // answer engine would ever surface is the definition of markup that costs
+  // more than it returns.
 
   // --- everything the vocabulary has no field for --------------------------
   attributes: AttributeEntry[];
@@ -426,18 +421,10 @@ export function loadProfile(tenant: string): BusinessProfile | null {
     memberOf: parseStrings(raw.memberOf),
     founder: str(raw.founder),
 
-    faxNumber: str(raw.faxNumber),
     contactPoints: parseContactPoints(raw.contactPoints),
     bookingUrl: parseUrl(raw.bookingUrl),
 
     specialHours: parseSpecialHours(raw.specialHours),
-
-    taxID: str(raw.taxID),
-    vatID: str(raw.vatID),
-    duns: str(raw.duns),
-    leiCode: str(raw.leiCode),
-    isicV4: str(raw.isicV4),
-    branchCode: str(raw.branchCode),
 
     attributes: parseAttributes(raw.attributes),
   };

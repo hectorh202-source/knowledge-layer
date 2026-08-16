@@ -176,7 +176,6 @@ export async function buildJsonLd(
   }
 
   // --- contact -------------------------------------------------------------
-  if (business.faxNumber) businessNode.faxNumber = business.faxNumber;
   if (business.contactPoints.length > 0) {
     businessNode.contactPoint = business.contactPoints.map((point) => ({
       "@type": "ContactPoint",
@@ -202,14 +201,6 @@ export async function buildJsonLd(
       result: { "@type": "Reservation", name: "Service appointment" },
     };
   }
-
-  // --- registration identifiers -------------------------------------------
-  if (business.taxID) businessNode.taxID = business.taxID;
-  if (business.vatID) businessNode.vatID = business.vatID;
-  if (business.duns) businessNode.duns = business.duns;
-  if (business.leiCode) businessNode.leiCode = business.leiCode;
-  if (business.isicV4) businessNode.isicV4 = business.isicV4;
-  if (business.branchCode) businessNode.branchCode = business.branchCode;
 
   // --- attributes the vocabulary has no field for --------------------------
   if (business.attributes.length > 0) {
@@ -287,8 +278,17 @@ export async function buildJsonLd(
     businessNode.hasCredential = credentials.map((credential) => ({
       "@type": "EducationalOccupationalCredential",
       name: credential.title,
+      // The kind — "license", "certification", "insurance" — stated rather than
+      // left to be inferred from the title. It is the difference between a
+      // state licence and a manufacturer badge, which are not equivalent claims.
+      ...(credential.kind ? { credentialCategory: credential.kind } : {}),
       ...(credential.identifier ? { identifier: credential.identifier } : {}),
       ...(credential.issuer ? { recognizedBy: { "@type": "Organization", name: credential.issuer } } : {}),
+      // Lapsed credentials never reach this point — the source filters them —
+      // so a date here is always in the future. Publishing it is what separates
+      // a licence known to be current from one nobody has checked in years,
+      // which otherwise read identically.
+      ...(credential.validUntil ? { expires: credential.validUntil } : {}),
     }));
   }
 
