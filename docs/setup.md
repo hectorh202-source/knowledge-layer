@@ -40,6 +40,7 @@ key.
 | `SUPABASE_SERVICE_ROLE_KEY` | The content loader, and the portal's store | Server-side only. Never send to a browser. |
 | `CONTENT_STORE` | Forcing a store | `files` or `supabase`. Unset auto-detects. See below. |
 | `PLATFORM_ADMIN_EMAILS` | Creating agencies | Comma separated. Empty means no platform tier. |
+| `STRIPE_SECRET_KEY` | Billing payments | Optional. `sk_test_` or `sk_live_` — the mode is read from the key. |
 | `TENANT_SLUG` | CLI default, and pinning the API | No default. `--tenant` overrides it. Set on the API, it pins every request to one client and ignores the hostname. |
 | `CATALOG_DOMAIN` | Catalog generation | Tier 3. |
 | `API_BASE_URL` | OpenAPI `servers` block | Tier 3. A spec advertising localhost is worse than none. |

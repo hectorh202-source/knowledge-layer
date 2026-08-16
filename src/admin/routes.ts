@@ -859,6 +859,15 @@ export function createAdminRouter(): Router {
         supabase: supabaseConfigured,
         serviceRoleKey: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY),
         googleMaps: Boolean(process.env.GOOGLE_MAPS_API_KEY),
+        stripe: Boolean(process.env.STRIPE_SECRET_KEY),
+        // From the key itself, never a separate setting — a mode flag that can
+        // disagree with the key is a way to believe you are in test mode while
+        // charging a real card.
+        stripeMode: process.env.STRIPE_SECRET_KEY?.trim().startsWith("sk_live_")
+          ? "live"
+          : process.env.STRIPE_SECRET_KEY
+            ? "test"
+            : null,
       },
       clients: (await listTenantSlugs()).length,
     });

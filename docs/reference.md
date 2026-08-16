@@ -139,6 +139,33 @@ A ledger, not a payment processor. No card details are held here.
 | Starting plan | $2,500 setup, $800/month |
 | Storage | Supabase only — cross-tenant, and it is money, so no file fallback |
 | Enforcement | Overdue is flagged, never enforced. A billing problem must not become a client's discoverability outage |
+| Payments | Stripe, optional. Without a key the ledger still works and you mark invoices paid by hand |
+
+### Stripe
+
+**A payment rail, not a source of truth.** This app owns the schedule — who
+is on what, when the next period starts, what it costs. Stripe is asked to
+collect one invoice and asked back later whether it was paid.
+
+Deliberately **not** Stripe Subscriptions. Those put the same facts in two
+systems that can disagree: a price changed in the dashboard and not here, a
+subscription cancelled there and still active here, and no way to say which is
+right.
+
+**Reconciliation is polled, not pushed.** Loading the billing page asks Stripe
+about the open invoices and marks the paid ones paid. A webhook needs a public
+URL and therefore a deployment; polling needs neither and is a handful of
+requests at this size. Webhooks are worth adding in the hundreds of clients.
+
+**Mode comes from the key** — `sk_test_` or `sk_live_` — never a separate
+setting, because a flag that can disagree with the key is a way to believe you
+are testing while charging a real card. Every billing screen states which mode
+it is in, and test-mode invoices are tagged in the list.
+
+Nothing sends by itself. `auto_advance` is off, so Stripe never decides on its
+own to email a customer; **Send** is always an explicit press. Invoices are
+pushed with our own invoice number as the idempotency key, so a double-click
+cannot bill a period twice.
 
 Amounts are integer cents everywhere. Plan prices are edited in the database
 on purpose — a price is the one number that should not be a click away from

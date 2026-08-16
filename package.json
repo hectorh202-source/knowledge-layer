@@ -27,7 +27,8 @@
     "@supabase/supabase-js": "^2.112.3",
     "cheerio": "^1.2.0",
     "dotenv": "^16.4.7",
-    "express": "^4.22.2"
+    "express": "^4.22.2",
+    "stripe": "^22.5.0"
   },
   "devDependencies": {
     "@types/express": "^4.17.25",

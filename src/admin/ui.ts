@@ -1004,8 +1004,24 @@ async function billingView(){
 
   const stat=(v,l,cls)=>'<div class="stat'+(cls?" "+cls:"")+'"><div class="n">'+v+'</div><div class="l">'+l+'</div></div>';
 
+  const st = r.stripe || {};
+
   return '<h1>Billing</h1><div class="sub">What each client is on, and what is outstanding. '+
-    'A ledger &mdash; money moves however you already collect it, and no card details are held here.</div>'+
+    'Invoices are raised here and collected by Stripe; no card details are held in this app.</div>'+
+
+    (st.enabled
+      ? (st.mode==="live"
+          ? '<div class="banner bad"><strong>Stripe is in LIVE mode.</strong> Invoices raised here go to real customers '+
+            'and take real money. Nothing sends by itself &mdash; an invoice is only emailed when you press Send.</div>'
+          : '<div class="banner ok"><strong>Stripe is in test mode.</strong> Invoices are real objects in your Stripe test '+
+            'account and nothing is charged. Switch the key in .env when you are ready.</div>')
+      : '<div class="banner warn"><strong>Stripe is not connected.</strong> Invoices are still raised and tracked here, '+
+        'and you mark them paid by hand. Add <code>STRIPE_SECRET_KEY</code> to .env for payment pages and automatic reconciliation.</div>')+
+
+    (r.synced && r.synced.paid && r.synced.paid.length
+      ? '<div class="banner ok"><strong>'+r.synced.paid.length+' invoice'+(r.synced.paid.length===1?"":"s")+
+        ' marked paid from Stripe</strong> just now &mdash; '+esc(r.synced.paid.join(", "))+'.</div>'
+      : '')+
 
     (r.overdueCents>0
       ? '<div class="banner bad"><strong>'+usd(r.overdueCents)+' overdue.</strong> '+
@@ -1027,7 +1043,10 @@ async function billingView(){
       stat(usd(r.overdueCents),"Overdue")+
     '</div>'+
 
-    '<div class="card"><div class="card-h"><h2>Clients</h2><span class="meta">'+r.activeCount+' active</span></div>'+
+    '<div class="card"><div class="card-h"><h2>Clients</h2><div class="row">'+
+      '<span class="meta">'+r.activeCount+' active</span>'+
+      (st.enabled?'<button class="btn quiet" id="billSync">Check Stripe for payments</button>':'')+
+      '</div></div>'+
       (rows.length
         ? '<table><tr><th>Client</th><th>Status</th><th>Rate</th><th>Next invoice</th><th>Outstanding</th><th></th></tr>'+body+'</table>'
         : '<div class="empty">No client has a billing account yet. Open one from its Billing tab.</div>')+
@@ -1077,6 +1096,7 @@ async function clientBillingView(){
   }
 
   const acc = r.account, sub = r.subscription, plans = r.plans||[];
+  const stripeOn = !!(r.stripe && r.stripe.enabled);
   const name = detail && detail.settings ? detail.settings.name : slug;
 
   const invoiceRows = (r.invoices||[]).map(inv=>{
@@ -1085,15 +1105,30 @@ async function clientBillingView(){
       : inv.status==="void" ? '<span class="pill">void</span>'
       : overdue ? '<span class="pill bad">overdue</span>' : '<span class="pill wait">issued</span>';
 
-    return '<tr><td><div class="primary">'+esc(inv.number)+'</div>'+
+    // A test-mode invoice sitting in the list next to live ones is how someone
+    // chases a payment that was never real.
+    const modeTag = inv.providerMode==="test" ? ' <span class="pill wait">test</span>' : '';
+
+    const actions = inv.status!=="issued" ? ""
+      : '<div class="toggle">'+
+          (inv.providerUrl
+            ? '<a class="btn quiet" href="'+esc(inv.providerUrl)+'" target="_blank" rel="noopener">Payment page ↗</a>'
+            : "")+
+          (stripeOn && inv.providerRef
+            ? '<button class="btn" data-send="'+esc(inv.id)+'">Send</button>'
+            : stripeOn
+              ? '<button class="btn" data-push="'+esc(inv.id)+'">Push to Stripe</button>'
+              : "")+
+          '<button class="btn" data-paid="'+esc(inv.id)+'">Mark paid</button>'+
+          '<button class="btn danger" data-void="'+esc(inv.id)+'">Void</button>'+
+        '</div>';
+
+    return '<tr><td><div class="primary">'+esc(inv.number)+modeTag+'</div>'+
       '<div class="secondary">'+(inv.periodStart?esc(inv.periodStart)+' to '+esc(inv.periodEnd):"—")+'</div></td>'+
       '<td class="meta">'+usd(inv.totalCents)+'</td>'+
       '<td class="meta">'+pill+(inv.dueOn&&inv.status==="issued"?'<div class="secondary">due '+esc(inv.dueOn)+'</div>':"")+
         (inv.paidOn?'<div class="secondary">'+esc(inv.paidOn)+(inv.paidMethod?' · '+esc(inv.paidMethod):"")+'</div>':"")+'</td>'+
-      '<td class="meta">'+(inv.status==="issued"
-        ? '<div class="toggle"><button class="btn" data-paid="'+esc(inv.id)+'">Mark paid</button>'+
-          '<button class="btn danger" data-void="'+esc(inv.id)+'">Void</button></div>'
-        : "")+'</td></tr>';
+      '<td class="meta">'+actions+'</td></tr>';
   }).join("");
 
   const planOptions = plans.map(pl=>
@@ -1118,6 +1153,10 @@ async function clientBillingView(){
     '<div class="card"><div class="card-h"><h2>Who gets the invoice</h2></div><div class="card-b">'+
       '<div class="sub" style="margin:0 0 .7rem">Deliberately not the profile email. That address publishes &mdash; it is '+
       'where their customers write. An invoice goes to whoever does their books.</div>'+
+      (stripeOn
+        ? '<div class="sub" style="margin:0 0 .7rem">This is also the address Stripe uses for the customer record and '+
+          'for anything you send from here.</div>'
+        : "")+
       '<div class="cols2">'+
         '<label class="f"><span>Company name</span><input data-b="companyName" value="'+esc(acc?acc.companyName:"")+'" placeholder="'+esc(name)+'"></label>'+
         '<label class="f"><span>Billing email</span><input data-b="contactEmail" type="email" value="'+esc(acc?acc.contactEmail:"")+'" placeholder="accounts@example.com"></label>'+
@@ -1238,6 +1277,12 @@ async function statusView(){
     '<tr><td>Supabase URL and anon key</td><td class="meta">'+yn(st.config.supabase)+'</td></tr>'+
     '<tr><td>Supabase service role key <span class="meta">(loader only, never public)</span></td><td class="meta">'+yn(st.config.serviceRoleKey)+'</td></tr>'+
     '<tr><td>Google Maps API key <span class="meta">(Places intake)</span></td><td class="meta">'+yn(st.config.googleMaps)+'</td></tr>'+
+    '<tr><td>Stripe <span class="meta">(billing)</span></td><td class="meta">'+
+      (st.config.stripe
+        ? (st.config.stripeMode==="live"
+            ? '<span class="pill bad">live mode</span>'
+            : '<span class="pill ok">test mode</span>')
+        : yn(false))+'</td></tr>'+
   '</table></div>';
 }
 
@@ -1647,6 +1692,38 @@ document.addEventListener("click", async e => {
       try{
         await api("/billing/invoices/"+t.dataset.void+"/void",{method:"POST",body:JSON.stringify({})});
         await render(); toast("Voided.");
+      } finally { done(); }
+      return;
+    }
+
+    if(t.id==="billSync"){
+      const done = working(t, "Checking");
+      try{
+        const r = await api("/billing/reconcile",{method:"POST",body:JSON.stringify({})});
+        await render();
+        toast(r.paid.length
+          ? r.paid.length+" marked paid: "+r.paid.join(", ")
+          : "Checked "+r.checked+" open invoice(s) — none paid yet.");
+      } finally { done(); }
+      return;
+    }
+
+    if(t.dataset.push){
+      const done = working(t, "Pushing");
+      try{
+        const r = await api("/billing/invoices/"+t.dataset.push+"/push",{method:"POST",body:JSON.stringify({})});
+        await render();
+        toast(r.invoice.providerUrl ? "In Stripe — payment page ready." : "Pushed to Stripe.");
+      } finally { done(); }
+      return;
+    }
+
+    if(t.dataset.send){
+      if(!confirm("Email this invoice to the billing contact through Stripe?")) return;
+      const done = working(t, "Sending");
+      try{
+        await api("/billing/invoices/"+t.dataset.send+"/send",{method:"POST",body:JSON.stringify({})});
+        await render(); toast("Sent.");
       } finally { done(); }
       return;
     }

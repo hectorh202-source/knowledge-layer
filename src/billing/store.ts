@@ -17,6 +17,16 @@
  * disagreeing with itself by a penny.
  */
 
+import {
+  ensureCustomer,
+  invoiceStatus,
+  pushInvoice,
+  sendInvoice as sendViaStripe,
+  stripeEnabled,
+  stripeMode,
+  voidStripeInvoice,
+} from "./stripe";
+
 export interface Plan {
   id: string;
   name: string;
@@ -72,6 +82,11 @@ export interface Invoice {
   dueOn: string | null;
   paidOn: string | null;
   paidMethod: string;
+  /** Stripe's invoice id, once it has been pushed there. */
+  providerRef: string | null;
+  /** The hosted page a customer pays on. */
+  providerUrl: string | null;
+  providerMode: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -316,6 +331,9 @@ function toInvoice(r: Record<string, unknown>, slug: string): Invoice {
     dueOn: (r.due_on as string) ?? null,
     paidOn: (r.paid_on as string) ?? null,
     paidMethod: String(r.paid_method ?? ""),
+    providerRef: (r.provider_ref as string) ?? null,
+    providerUrl: (r.provider_url as string) ?? null,
+    providerMode: (r.provider_mode as string) ?? null,
   };
 }
 
@@ -412,7 +430,154 @@ export async function invoiceClient(
     }),
   });
 
-  return toInvoice(rows[0], slug);
+  const invoice = toInvoice(rows[0], slug);
+
+  // Mirror it into Stripe if configured. Deliberately after the local row
+  // exists and after the subscription has moved on: the ledger is the record,
+  // and a Stripe outage should leave an invoice that can be pushed later rather
+  // than a period that was never billed.
+  if (stripeEnabled()) {
+    try {
+      return await pushToProvider(invoice, options?.dueDays ?? 14);
+    } catch (error) {
+      // Reported on the invoice rather than thrown. The invoice is real and
+      // owed; only the payment page is missing, and the Send button can retry.
+      console.error(`  Stripe push failed for ${invoice.number}: ${
+        error instanceof Error ? error.message : error
+      }`);
+    }
+  }
+
+  return invoice;
+}
+
+/**
+ * Create this invoice in Stripe and record where it landed.
+ *
+ * Separate from invoiceClient so a push that failed — no key, Stripe down, a
+ * customer deleted in the dashboard — can be retried without re-billing the
+ * period.
+ */
+export async function pushToProvider(invoice: Invoice, dueDays = 14): Promise<Invoice> {
+  if (!stripeEnabled()) throw new Error("Stripe is not configured.");
+  if (invoice.providerRef) return invoice;
+
+  const found = await accountFor(invoice.tenantSlug);
+  if (!found) throw new Error(`No billing account for "${invoice.tenantSlug}".`);
+
+  const raw = (await rest(
+    `billing_accounts?id=eq.${found.account.id}&select=provider_ref,provider_mode&limit=1`
+  )) as { provider_ref: string | null; provider_mode: string | null }[];
+
+  const customer = await ensureCustomer(
+    found.account,
+    raw?.[0]?.provider_ref ?? null,
+    raw?.[0]?.provider_mode ?? null
+  );
+
+  await rest(`billing_accounts?id=eq.${found.account.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      provider: "stripe",
+      provider_ref: customer.id,
+      provider_mode: customer.mode,
+      updated_at: new Date().toISOString(),
+    }),
+  });
+
+  const pushed = await pushInvoice(customer.id, invoice, { dueDays });
+
+  const rows = (await rest(`billing_invoices?id=eq.${invoice.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      provider: "stripe",
+      provider_ref: pushed.id,
+      provider_url: pushed.url,
+      provider_mode: pushed.mode,
+      updated_at: new Date().toISOString(),
+    }),
+  })) as Record<string, unknown>[];
+
+  return toInvoice(rows[0], invoice.tenantSlug);
+}
+
+/** Email it through Stripe. */
+export async function sendInvoice(invoiceId: string): Promise<string | null> {
+  const rows = (await rest(
+    `billing_invoices?id=eq.${invoiceId}&select=provider_ref&limit=1`
+  )) as { provider_ref: string | null }[];
+
+  const ref = rows?.[0]?.provider_ref;
+  if (!ref) throw new Error("This invoice is not in Stripe yet.");
+
+  const url = await sendViaStripe(ref);
+  if (url) {
+    await rest(`billing_invoices?id=eq.${invoiceId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ provider_url: url, updated_at: new Date().toISOString() }),
+    });
+  }
+  return url;
+}
+
+/**
+ * Ask Stripe about every open invoice and mark the paid ones paid.
+ *
+ * Polling rather than a webhook. A webhook needs a public URL, which needs a
+ * deployment; this needs neither, works from a laptop, and at fifty clients is
+ * a handful of requests. It is the right trade until instant notification
+ * matters or the invoice count reaches the hundreds.
+ *
+ * Only ever marks an invoice paid — never the reverse. Stripe saying "open"
+ * about something recorded as paid by bank transfer is not evidence that the
+ * money came back.
+ */
+export async function reconcile(): Promise<{ checked: number; paid: string[] }> {
+  if (!stripeEnabled()) return { checked: 0, paid: [] };
+
+  const mode = stripeMode();
+  const open = ((await rest(
+    `billing_invoices?status=eq.issued&provider_ref=not.is.null&select=id,number,provider_ref,provider_mode`
+  )) ?? []) as {
+    id: string;
+    number: string;
+    provider_ref: string;
+    provider_mode: string | null;
+  }[];
+
+  const paid: string[] = [];
+  let checked = 0;
+
+  for (const row of open) {
+    // Skip invoices raised in the other mode. Their ids do not exist here.
+    if (row.provider_mode && row.provider_mode !== mode) continue;
+    checked++;
+
+    const status = await invoiceStatus(row.provider_ref);
+    if (!status) continue;
+
+    if (status.paid) {
+      await rest(`billing_invoices?id=eq.${row.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          status: "paid",
+          paid_on: status.paidOn ?? today(),
+          paid_method: "Stripe",
+          provider_url: status.url,
+          provider_synced_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }),
+      });
+      paid.push(row.number);
+    } else {
+      await rest(`billing_invoices?id=eq.${row.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ provider_synced_at: new Date().toISOString() }),
+      });
+    }
+  }
+
+  return { checked, paid };
 }
 
 /**
@@ -449,6 +614,16 @@ export async function markPaid(id: string, method: string): Promise<void> {
 }
 
 export async function voidInvoice(id: string): Promise<void> {
+  const rows = (await rest(
+    `billing_invoices?id=eq.${id}&select=provider_ref&limit=1`
+  )) as { provider_ref: string | null }[];
+
+  // Stripe first. Voiding here and failing there would leave a live payment
+  // page for an invoice this app considers cancelled — a customer could pay it.
+  if (rows?.[0]?.provider_ref && stripeEnabled()) {
+    await voidStripeInvoice(rows[0].provider_ref);
+  }
+
   await rest(`billing_invoices?id=eq.${id}`, {
     method: "PATCH",
     body: JSON.stringify({ status: "void", updated_at: new Date().toISOString() }),

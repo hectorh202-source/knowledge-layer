@@ -8,7 +8,10 @@ import {
   invoicesFor,
   listPlans,
   markPaid,
+  pushToProvider,
+  reconcile,
   saveAccount,
+  sendInvoice,
   slugForInvoice,
   slugForSubscription,
   subscribe,
@@ -16,6 +19,7 @@ import {
   updateSubscription,
   voidInvoice,
 } from "../billing/store";
+import { ping, stripeEnabled, stripeMode } from "../billing/stripe";
 
 /**
  * Billing routes.
@@ -108,8 +112,30 @@ export function billingRoutes(visibleSlugs: (req: Request) => Promise<string[]>)
   router.get("/", async (req: Request, res: Response) => {
     try {
       const slugs = await visibleSlugs(req);
+      // Reconcile before summarising, so an invoice paid in Stripe since the
+      // last visit is already marked paid in the numbers on screen rather than
+      // appearing as overdue until someone presses something.
+      let synced = null;
+      if (stripeEnabled()) {
+        try {
+          synced = await reconcile();
+        } catch (error) {
+          // A Stripe outage must not take the billing page down with it. The
+          // ledger is the record; Stripe is how the money arrives.
+          console.error(
+            `  Stripe reconcile failed: ${error instanceof Error ? error.message : error}`
+          );
+        }
+      }
+
       const [data, plans] = await Promise.all([summary(slugs), listPlans()]);
-      res.json({ ...data, plans, due: await dueNow(slugs) });
+      res.json({
+        ...data,
+        plans,
+        due: await dueNow(slugs),
+        stripe: { enabled: stripeEnabled(), mode: stripeMode() },
+        synced,
+      });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
     }
@@ -128,6 +154,7 @@ export function billingRoutes(visibleSlugs: (req: Request) => Promise<string[]>)
         subscription: found?.subscription ?? null,
         invoices,
         plans,
+        stripe: { enabled: stripeEnabled(), mode: stripeMode() },
       });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
@@ -257,6 +284,52 @@ export function billingRoutes(visibleSlugs: (req: Request) => Promise<string[]>)
     } catch (error) {
       res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
     }
+  });
+
+  /** Ask Stripe about every open invoice and mark the paid ones paid. */
+  router.post("/reconcile", async (_req: Request, res: Response) => {
+    try {
+      if (!stripeEnabled()) throw new Error("Stripe is not configured.");
+      res.json(await reconcile());
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  /**
+   * Push an invoice to Stripe that is not there yet.
+   *
+   * A retry, for the case where the invoice was raised while Stripe was
+   * unreachable or unconfigured. Never re-bills the period — that already
+   * happened locally.
+   */
+  router.post("/invoices/:id/push", async (req: AgencyRequest, res: Response) => {
+    try {
+      if (!(await ownsRow(req, res, slugForInvoice))) return;
+
+      const slug = await slugForInvoice(req.params.id);
+      const invoice = (await invoicesFor(slug!)).find((i) => i.id === req.params.id);
+      if (!invoice) throw new Error("No such invoice.");
+
+      res.json({ invoice: await pushToProvider(invoice) });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  /** Email the invoice through Stripe. */
+  router.post("/invoices/:id/send", async (req: AgencyRequest, res: Response) => {
+    try {
+      if (!(await ownsRow(req, res, slugForInvoice))) return;
+      res.json({ url: await sendInvoice(req.params.id) });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  /** Does the key work, and which mode is it. For the status page. */
+  router.get("/stripe", async (_req: Request, res: Response) => {
+    res.json({ enabled: stripeEnabled(), mode: stripeMode(), ...(await ping()) });
   });
 
   return router;
