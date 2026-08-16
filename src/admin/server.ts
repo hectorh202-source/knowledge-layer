@@ -169,7 +169,7 @@ async function main(): Promise<void> {
     console.log(`  http://localhost:${port}`);
     console.log(`  clients : ${clientCount}`);
     if (migrated) {
-      console.log(`\n  Migrated the previous single-client content into content/tenants/titanz/.`);
+      console.log(`\n  Migrated the previous single-client content into content/tenants/${legacySlug}/.`);
     }
     console.log(
       authed

@@ -8,7 +8,7 @@ import { DEFAULT_SPEC_VERSION, MEDIA_TYPES } from "./schema";
  * Generates ai-catalog.json.
  *
  *   npm run catalog                                  # verifies against a running API
- *   npm run catalog -- --api-base-url https://api.titanzplumbing.com
+ *   npm run catalog -- --api-base-url https://api.acme.com
  *   npm run catalog -- --allow-unverified            # emit anyway, for inspection
  *   npm run catalog -- --print
  *
@@ -24,8 +24,14 @@ function main(): Promise<void> {
     return i !== -1 ? argv[i + 1] : undefined;
   };
 
-  const domain = get("--domain") ?? process.env.CATALOG_DOMAIN ?? "titanzplumbing.com";
-  const displayName = get("--name") ?? process.env.CATALOG_DISPLAY_NAME ?? "TitanZ Plumbing";
+  // No defaults. A catalog is a public claim made in a business's name, and a
+  // forgotten flag emitting one under whichever customer happened to be the
+  // default is the one failure this file must not have.
+  const domain = get("--domain") ?? process.env.CATALOG_DOMAIN;
+  if (!domain) throw new Error("No domain. Pass --domain <domain>, or set CATALOG_DOMAIN.");
+
+  const displayName = get("--name") ?? process.env.CATALOG_DISPLAY_NAME;
+  if (!displayName) throw new Error("No business name. Pass --name, or set CATALOG_DISPLAY_NAME.");
   const apiBaseUrl =
     get("--api-base-url") ?? process.env.API_BASE_URL ?? "http://localhost:3001";
 

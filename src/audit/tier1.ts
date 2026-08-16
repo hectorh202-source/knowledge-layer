@@ -31,7 +31,7 @@ export interface Tier1Report {
  *
  * Testing with a generic client proves nothing: blocks are almost always
  * applied by user agent at a CDN or WAF, which is exactly how the one on
- * calltitanz.com was found.
+ * the first real client was found.
  */
 const CRAWLERS: { name: string; ua: string; why: string }[] = [
   {

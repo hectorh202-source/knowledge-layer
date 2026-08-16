@@ -198,6 +198,42 @@ The public API stays unauthenticated deliberately — crawlers cannot log in, an
 everything it serves is already approved and published. RLS on the anon key is
 its boundary, not a password. See [setup.md](setup.md#authentication).
 
+### One deployment, every client
+
+The public API resolves the client **per request, from the Host header**. A
+client's domain points here:
+
+```
+api.acme.com  CNAME  <the deployment>
+```
+
+Two ways a hostname is registered, both from configuration the operator already
+fills in: whatever the client's **API base URL** setting points at, and
+`api.<their domain>` as the convention. Their bare domain is deliberately not
+registered — that is their website and it does not point here.
+
+Serving from the client's own domain is the point, not a convenience. Data at
+`api.acme.com` is the business corroborating itself; the same data at our
+domain is a third party vouching for them, which is a weaker entity signal.
+
+**An unrecognised host is a 404, never a fallback client.** Serving some
+arbitrary business's data to a caller who cannot tell they got the wrong
+company is worse than an error. For the same reason every response carries
+`Vary: Host` — two clients differ only by hostname, so a shared cache keyed on
+the URL alone would hand one business's markup to another's visitors.
+
+The mapping is cached for a minute, so a client added in the portal starts
+resolving without a redeploy.
+
+`TENANT_SLUG` or `--tenant` **pins** the process to one client and ignores the
+hostname. That is for local work, where `localhost` maps to nobody, and for a
+deliberately dedicated deployment.
+
+Nothing has a default client any more. The API, the JSON-LD CLI, the catalog
+generator and the content loader all refuse to run without being told who they
+are acting for — a forgotten flag used to act on one particular customer
+instead of failing.
+
 ## The portal UI
 
 `src/admin/ui.ts` is a single-page app served as one string containing **one

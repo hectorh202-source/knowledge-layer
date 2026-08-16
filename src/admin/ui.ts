@@ -180,7 +180,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
   <div class="dlg-b">
     <h2 style="margin-bottom:.8rem">Add a client</h2>
     <label class="f"><span>Business name</span><input id="ncName" placeholder="TitanZ Plumbing &amp; Air Conditioning"></label>
-    <label class="f"><span>Website domain</span><input id="ncDomain" placeholder="calltitanz.com"></label>
+    <label class="f"><span>Website domain</span><input id="ncDomain" placeholder="acme.com"></label>
     <label class="f"><span>Business type (schema.org)</span>
       <select id="ncType">
         <option>LocalBusiness</option><option>Plumber</option><option>HVACBusiness</option>

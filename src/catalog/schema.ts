@@ -29,7 +29,7 @@ export interface CatalogHost {
 }
 
 export interface CatalogEntry {
-  /** Domain-scoped URN, e.g. urn:ai:titanzplumbing.com:api:knowledge */
+  /** Domain-scoped URN, e.g. urn:ai:acme.com:api:knowledge */
   identifier: string;
   displayName: string;
   /** Media type. Entries are typed by media type, not a short type string. */

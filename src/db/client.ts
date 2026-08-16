@@ -34,6 +34,17 @@ export function getSupabase(): SupabaseClient {
   return cached;
 }
 
+/**
+ * The client a CLI tool should act on when `--tenant` was not given.
+ *
+ * Throws rather than defaulting. This used to fall back to a hardcoded slug, so
+ * a forgotten flag quietly acted on one particular customer instead of failing
+ * — and on a machine holding production keys, published on their behalf.
+ */
 export function tenantSlug(): string {
-  return process.env.TENANT_SLUG ?? "titanz";
+  const slug = process.env.TENANT_SLUG?.trim();
+  if (!slug) {
+    throw new Error("No client. Pass --tenant <slug>, or set TENANT_SLUG in .env.");
+  }
+  return slug;
 }

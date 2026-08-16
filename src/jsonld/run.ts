@@ -8,8 +8,8 @@ import type { IntakeResult } from "../intake/types";
 /**
  * Generates schema.org JSON-LD for a business.
  *
- *   npm run jsonld -- --domain calltitanz.com --type Plumber
- *   npm run jsonld -- --domain calltitanz.com --print
+ *   npm run jsonld -- --tenant acme --domain acme.com --type Plumber
+ *   npm run jsonld -- --tenant acme --domain acme.com --print
  *
  * Writes both the raw graph and a paste-ready <script> block to data/jsonld/.
  */
@@ -49,13 +49,19 @@ async function main(): Promise<void> {
   };
 
   const domain = get("--domain") ?? process.env.CATALOG_DOMAIN;
-  if (!domain) throw new Error("--domain is required, e.g. --domain calltitanz.com");
+  if (!domain) throw new Error("--domain is required, e.g. --domain acme.com");
+
+  // No default client. Generating markup for whoever happened to be hardcoded,
+  // under a domain given on the command line, would state one business's facts
+  // about another.
+  const tenant = get("--tenant") ?? process.env.TENANT_SLUG?.trim();
+  if (!tenant) throw new Error("No client. Pass --tenant <slug>, or set TENANT_SLUG.");
 
   const schemaType = get("--type") ?? "LocalBusiness";
   const sourceKind = (get("--source") ?? "auto") as SourceKind;
 
   const source = createSource(sourceKind, {
-    tenant: get("--tenant") ?? process.env.TENANT_SLUG ?? "titanz",
+    tenant,
     includeUnreviewed: argv.includes("--include-unreviewed"),
   });
 
