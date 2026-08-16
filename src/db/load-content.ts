@@ -8,6 +8,7 @@ import {
   loadServices,
 } from "../data/content";
 import { loadProfile, profileExists, validateProfile } from "../data/profile";
+import { CONTENT_SOURCES, type ContentSource } from "../tenancy/storage";
 
 /**
  * Loads the content files into Supabase.
@@ -23,7 +24,9 @@ import { loadProfile, profileExists, validateProfile } from "../data/profile";
 
 function sourceOf(provenance: { source: string } | undefined): string {
   const source = provenance?.source;
-  return source === "gbp" || source === "places" || source === "website" ? source : "manual";
+  // Anything the enum does not know becomes "manual" rather than failing the
+  // batch. The exact value is kept in the provenance column regardless.
+  return CONTENT_SOURCES.includes(source as ContentSource) ? source! : "manual";
 }
 
 async function main(): Promise<void> {

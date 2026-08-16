@@ -102,10 +102,6 @@ async function main(): Promise<void> {
       await db.writeProfile(slug, profile);
       counts.profile = 1;
     }
-    if (settings) {
-      await db.writeSettings(slug, settings);
-      counts.settings = 1;
-    }
 
     for (const kind of CONTENT_KINDS) {
       const items = await files.readContent(slug, kind);
@@ -122,6 +118,16 @@ async function main(): Promise<void> {
     for (const run of await files.listIntake(slug)) {
       await db.writeIntake(slug, run.source, run.result);
       counts.intake++;
+    }
+
+    // Settings LAST, because their presence is what marks this client as
+    // migrated. Written first, a run that dies partway through leaves a client
+    // that looks done and gets skipped on the retry — which is exactly what
+    // happened the first time this ran. Every write above is idempotent, so a
+    // crashed run is safe to simply repeat.
+    if (settings) {
+      await db.writeSettings(slug, settings);
+      counts.settings = 1;
     }
 
     console.log(

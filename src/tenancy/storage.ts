@@ -31,6 +31,16 @@ export const CONTENT_KINDS: ContentKind[] = [
 
 export type IntakeSource = "website" | "places";
 
+/**
+ * The `content_source` enum, mirrored.
+ *
+ * Kept in step with supabase/migrations by hand, which is a real cost — but the
+ * alternative is a Postgres type error killing an entire batch of content over
+ * one unrecognised label.
+ */
+export const CONTENT_SOURCES = ["gbp", "places", "website", "manual", "generated"] as const;
+export type ContentSource = (typeof CONTENT_SOURCES)[number];
+
 export interface Tier1State {
   report: unknown | null;
   manual: Record<string, { checked: boolean; note?: string }>;
@@ -500,12 +510,19 @@ export class SupabaseStorage implements Storage {
   }
 
   private toRow(kind: ContentKind, item: Record<string, unknown>, tenantId: string, index: number) {
+    const claimed = (item.provenance as { source?: string } | undefined)?.source;
+
     const base = {
       tenant_id: tenantId,
       is_approved: item.approved === true,
       is_published: item.published === true,
       provenance: item.provenance ?? null,
-      source: ((item.provenance as { source?: string } | undefined)?.source ?? "manual") as string,
+      // Clamped to the enum. An extractor that learns a new source name would
+      // otherwise fail the whole write with a Postgres type error, losing every
+      // item in the batch over one unrecognised label — and the exact value
+      // survives in `provenance` either way, which is where anything that cares
+      // about origin actually reads it.
+      source: CONTENT_SOURCES.includes(claimed as ContentSource) ? claimed : "manual",
     };
 
     if (kind === "services") {
