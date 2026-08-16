@@ -490,11 +490,23 @@ to users today. A2A is real protocol with the least evidence behind it; stub the
 build when a registry is actually sending queries.
 
 ### 5.4 How do migrations actually get applied?
-**Status:** OPEN — no Supabase project exists yet
-`supabase/migrations/0001_initial_schema.sql` can be pasted into the Supabase SQL editor to start,
-but that doesn't version-track what's been applied. The Supabase CLI does, and matters more once
-there's a second environment or a second tenant.
-**Blocks:** Running the loader for real. Not the build — `--dry-run` works without a database.
+**Status:** ANSWERED — 2026-08-16. Via the GitHub integration, tracked.
+Project created and connected to the repository. Keys are the newer
+`sb_publishable_…` / `sb_secret_…` format rather than legacy JWTs; both authenticate, and the
+anon/service-role guard in the code correctly sees them as different.
+**Chosen:** the GitHub integration, so each schema change arrives as a reviewable migration and is
+applied the same way every time. Several more are coming — auth, agencies, whatever the
+client-facing report needs.
+**Rejected:** pasting into the SQL editor. It works instantly but leaves Supabase's migration
+history unaware the schema ran, so the next `db push` re-applies `0001` and fails on objects that
+already exist. Reconciling that by hand is the usual way this goes wrong, and with nothing yet
+applied there was no reason to start dirty.
+**Two prerequisites were missing and are now fixed:** `supabase/config.toml` did not exist (the
+integration needs it), and the migration was named `0001_initial_schema.sql` where the tooling
+requires a 14-digit timestamp prefix — it is now `20260816120000_initial_schema.sql`. A file without
+that prefix is silently skipped, which is likely why nothing had been applied.
+**Still to do:** the apply itself, which is a one-way action on a live database and belongs to a
+person rather than a script.
 
 ### 5.5 `price_stats` is append-only and grows forever
 **Status:** OPEN — intentional for now
