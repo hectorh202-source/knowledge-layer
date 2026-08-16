@@ -35,6 +35,9 @@ aside{background:var(--sidebar);color:var(--sidebar-ink);padding:1.1rem .8rem;
   display:flex;flex-direction:column;gap:.3rem;position:sticky;top:0;height:100vh;overflow-y:auto}
 .brand{color:#fff;font-weight:650;letter-spacing:-.01em;padding:.2rem .5rem 1rem;font-size:1.02rem}
 .brand small{display:block;font-weight:400;color:var(--sidebar-ink);font-size:.74rem;margin-top:.15rem}
+/* Sign out sits at the foot of the sidebar rather than wherever the list of
+   sections happens to end. */
+#signOut{margin-top:auto;padding-top:.8rem}
 .navlabel{font-size:.67rem;text-transform:uppercase;letter-spacing:.09em;
   color:#5d6675;padding:.9rem .5rem .3rem}
 .nav{display:block;width:100%;text-align:left;background:none;border:0;color:var(--sidebar-ink);
@@ -879,8 +882,17 @@ function renderPickList(){
   const shown = clients.filter(c=>
     !q || c.name.toLowerCase().indexOf(q)!==-1 || (c.domain||"").toLowerCase().indexOf(q)!==-1);
 
+  // Working on none of them is a real state — closing the client you were in
+  // without opening another. Without this the only way out was picking a
+  // different one.
+  const clear = current
+    ? '<button class="pick" data-pick=""><span class="client">'+
+      '<span><div class="primary">No client</div>'+
+      '<div class="sub">Close the current one</div></span></span></button>'
+    : "";
+
   $("pickList").innerHTML = shown.length
-    ? shown.map(c=>{
+    ? clear + shown.map(c=>{
         const pending = c.itemCount - c.approvedCount;
         const state = !clientReady(c)
           ? (c.blockingCount>0 ? c.blockingCount+" blocking" : "checks failing")
@@ -907,7 +919,14 @@ document.addEventListener("click", async e => {
   const t = e.target.closest("button"); if(!t) return;
   try{
     if(t.dataset.picker !== undefined){ openPicker(); return; }
-    if(t.dataset.pick){ $("clientPicker").close(); await openClient(t.dataset.pick); return; }
+    // Empty value is the "No client" row, so test for the attribute rather
+    // than a truthy value.
+    if(t.dataset.pick !== undefined){
+      $("clientPicker").close();
+      if(t.dataset.pick){ await openClient(t.dataset.pick); }
+      else { current=null; detail=null; view="clients"; syncLocation(); renderNav(); await render(); }
+      return;
+    }
     if(t.dataset.client){ await openClient(t.dataset.client); return; }
     if(t.dataset.open){ await openClient(t.dataset.open); return; }
     if(t.dataset.add !== undefined){ $("newClient").showModal(); return; }
@@ -1253,7 +1272,9 @@ $("pickAdd").addEventListener("click", ()=>{ $("clientPicker").close(); $("newCl
 // return is the whole interaction.
 $("pickSearch").addEventListener("keydown", async e=>{
   if(e.key !== "Enter") return;
-  const only = $("pickList").querySelectorAll("[data-pick]");
+  // Excludes the "No client" row, which also carries data-pick and would
+  // otherwise make a single filtered match look like two.
+  const only = $("pickList").querySelectorAll('[data-pick]:not([data-pick=""])');
   if(only.length !== 1) return;
   e.preventDefault();
   $("clientPicker").close();
