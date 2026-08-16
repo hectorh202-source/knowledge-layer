@@ -205,6 +205,42 @@ a tautology maintaining 150 lines that can no longer fail.
 It is also generated. `npm run vocabulary:build` rebuilds it from schema.org, so
 any hand-pruning reappears.
 
+### An audit that reads its own output back
+
+**Symptom.** The NAP audit reported four sources in perfect agreement,
+immediately after publishing our markup to the client's site.
+
+**Cause.** Two of those "sources" were our own snippet. The crawl re-read the
+JSON-LD we had just pasted, and the live-markup check read the same node. Both
+agreed with the profile because both *were* the profile.
+
+**Why it matters.** The audit would have reported a clean bill of health forever
+after publication — exactly when it most needs to keep watching Google, the one
+source that stays independent.
+
+**Fix.** Every value is now marked independent or not. The live-markup source is
+independent only when the node does not carry our `@id`; a crawl value is
+independent unless it came from JSON-LD while our markup is live. A field can
+agree everywhere and still be uncorroborated, and the report says so.
+
+**Lesson.** When a check starts passing right after you changed something it
+measures, ask whether you changed the thing or the measurement.
+
+### `&amp;` reported as a name conflict
+
+**Symptom.** `Titanz Plumbing & Air Conditioning` versus `Titanz Plumbing &amp;
+Air Conditioning`, flagged HIGH.
+
+**Cause.** Markup read off a live page arrives HTML-escaped — some plugins escape
+JSON-LD contents even though they need not. The normaliser turned `&` into `and`
+and left `&amp;` as the word "amp".
+
+**Fix.** Entities are decoded before comparison.
+
+**Why it mattered enough to fix immediately.** This audit's entire value rests on
+people trusting its findings. One false conflict of this kind and the whole
+report gets skimmed.
+
 ### False positives are worse than no check
 
 The validator's first run produced ~90 warnings per build from two bugs in

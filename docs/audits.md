@@ -59,11 +59,40 @@ Two camps, two apiece. That tells you where to go. Four flat rows of
 near-identical text would not.
 
 **Matching is normalised, not literal.** `(941) 500-3351` and `941-500-3351` are
-one number; `Main Street` and `Main St` one address; `&` and `and` one word;
-ZIP+4 and ZIP one place. An audit that reports formatting as a conflict trains
-people to ignore it.
+one number; `Main Street` and `Main St` one address; `&`, `and` and `&amp;` one
+word; ZIP+4 and ZIP one place. An audit that reports formatting as a conflict
+trains people to ignore it.
 
 **Absence is not conflict.** A source silent on a field disagrees with nobody.
+
+### Independent sources versus echoes
+
+Once our markup is published to a client's site, the site starts reading our own
+claim back to us. The crawl and the live-markup check then agree with the profile
+because they **are** the profile — and the audit would report a clean bill of
+health forever after publication, precisely when it most needs to keep watching
+Google.
+
+So each value is marked independent or not:
+
+| Source | Independent? |
+|---|---|
+| Business profile | Never — it is the claim being checked, not evidence for it |
+| Google Places | Always |
+| Live site markup | Only when the node does **not** carry our `@id` |
+| Website crawl | Unless the value came from JSON-LD while our markup is live |
+
+A field can therefore *agree everywhere* and still be **uncorroborated**, which
+the report calls `weak` and explains:
+
+```
+ok    name
+      all 4 source(s) agree: Junk Chucker Junk Removal and Hauling
+      1 independent — confirmed
+```
+
+Four sources, one of them actually evidence. That is an honest reading of a
+published client, and it keeps Google as the source that matters.
 
 Name, phone and city are `high` severity — they are what engines match records
 on. Street, region and postal code are `medium`.

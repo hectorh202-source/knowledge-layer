@@ -39,6 +39,16 @@ export interface NapValue {
   raw: string;
   /** Normalised form actually used for comparison. */
   key: string;
+  /**
+   * Whether this value is evidence from the outside world.
+   *
+   * Once our markup is published to the customer's site, the site starts
+   * reading back what we put there. The crawl and the live-markup check then
+   * agree with the profile because they *are* the profile, and the audit would
+   * report a clean bill of health forever after publication — precisely when it
+   * most needs to keep watching Google.
+   */
+  independent: boolean;
 }
 
 /** Sources that hold the same normalised value — one side of a disagreement. */
@@ -52,6 +62,8 @@ export interface NapFinding {
   field: NapField;
   /** True when every source that has an opinion agrees. */
   agrees: boolean;
+  /** True when at least one *independent* source confirms the profile's value. */
+  corroborated: boolean;
   severity: "high" | "medium";
   values: NapValue[];
   /**
@@ -86,8 +98,28 @@ const STREET_WORDS: Record<string, string> = {
   northeast: "ne", northwest: "nw", southeast: "se", southwest: "sw",
 };
 
+/**
+ * HTML entities, decoded before anything is compared.
+ *
+ * Markup read off a live page frequently arrives escaped — some plugins escape
+ * the contents of a JSON-LD block even though they need not. Left encoded,
+ * "Acme &amp; Sons" normalises to "acme amp sons" while the profile's "Acme &
+ * Sons" becomes "acme and sons", and the audit reports a conflict that does not
+ * exist. A false conflict is the one failure this check cannot afford.
+ */
+function decodeEntities(value: string): string {
+  return value
+    .replace(/&amp;/gi, "&")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&quot;/gi, '"')
+    .replace(/&(?:apos|#39);/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&#(\d+);/g, (_match, code) => String.fromCharCode(Number(code)));
+}
+
 function normalize(field: NapField, value: string): string {
-  const trimmed = value.trim();
+  const trimmed = decodeEntities(value).trim();
   if (!trimmed) return "";
 
   if (field === "phone") {
@@ -120,18 +152,30 @@ function normalize(field: NapField, value: string): string {
 }
 
 /** Picks the most-agreed candidate from an intake file's list. */
-function bestCandidate(candidates: { value: string; provenance: { confidence: string } }[]): string {
-  if (!Array.isArray(candidates) || candidates.length === 0) return "";
+interface Picked {
+  value: string;
+  /** How it was recognised, kept so a JSON-LD-derived value can be spotted. */
+  method: string;
+}
+
+function bestCandidate(
+  candidates: { value: string; provenance: { confidence: string; method?: string } }[]
+): Picked {
+  if (!Array.isArray(candidates) || candidates.length === 0) return { value: "", method: "" };
+
   const weight: Record<string, number> = { high: 3, medium: 2, low: 1 };
-  const scores = new Map<string, number>();
+  const scores = new Map<string, { score: number; method: string }>();
+
   for (const candidate of candidates) {
     if (typeof candidate?.value !== "string") continue;
-    scores.set(
-      candidate.value,
-      (scores.get(candidate.value) ?? 0) + (weight[candidate.provenance?.confidence] ?? 1)
-    );
+    const existing = scores.get(candidate.value);
+    const score = weight[candidate.provenance?.confidence] ?? 1;
+    if (existing) existing.score += score;
+    else scores.set(candidate.value, { score, method: candidate.provenance?.method ?? "" });
   }
-  return [...scores.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "";
+
+  const best = [...scores.entries()].sort((a, b) => b[1].score - a[1].score)[0];
+  return best ? { value: best[0], method: best[1].method } : { value: "", method: "" };
 }
 
 function readIntake(tenant: string, file: string): IntakeResult | null {
@@ -144,7 +188,7 @@ function readIntake(tenant: string, file: string): IntakeResult | null {
   }
 }
 
-function fromEntity(entity: IntakeResult["entity"]): Partial<Record<NapField, string>> {
+function fromEntity(entity: IntakeResult["entity"]): Partial<Record<NapField, Picked>> {
   return {
     name: bestCandidate(entity.name),
     phone: bestCandidate(entity.phone),
@@ -155,8 +199,16 @@ function fromEntity(entity: IntakeResult["entity"]): Partial<Record<NapField, st
   };
 }
 
+const plain = (value: string | null | undefined): Picked => ({ value: value ?? "", method: "" });
+
 /** Pulls NAP out of whatever business markup the live site already publishes. */
-async function fromLiveSite(domain: string): Promise<Partial<Record<NapField, string>> | null> {
+interface LiveMarkup {
+  values: Partial<Record<NapField, Picked>>;
+  /** The node carries our @id, so it is our own snippet read back. */
+  isOurs: boolean;
+}
+
+async function fromLiveSite(domain: string): Promise<LiveMarkup | null> {
   try {
     const response = await fetch(`https://${domain}`, {
       headers: {
@@ -177,12 +229,15 @@ async function fromLiveSite(domain: string): Promise<Partial<Record<NapField, st
     const str = (value: unknown): string => (typeof value === "string" ? value : "");
 
     return {
-      name: str(node.name),
-      phone: str(node.telephone),
-      street: str(address.streetAddress),
-      city: str(address.addressLocality),
-      region: str(address.addressRegion),
-      postalCode: str(address.postalCode),
+      isOurs: node["@id"] === `https://${domain}/#business`,
+      values: {
+        name: plain(str(node.name)),
+        phone: plain(str(node.telephone)),
+        street: plain(str(address.streetAddress)),
+        city: plain(str(address.addressLocality)),
+        region: plain(str(address.addressRegion)),
+        postalCode: plain(str(address.postalCode)),
+      },
     };
   } catch {
     return null;
@@ -205,34 +260,59 @@ export async function auditNap(tenant: string, options?: { skipLive?: boolean })
   if (!settings) throw new Error(`No client "${tenant}".`);
 
   const notes: string[] = [];
-  const collected: { source: string; values: Partial<Record<NapField, string>> }[] = [];
+  interface Collected {
+    source: string;
+    values: Partial<Record<NapField, Picked>>;
+    /** Evidence from outside, as opposed to our own assertion echoed back. */
+    independent: boolean;
+  }
+  const collected: Collected[] = [];
 
   const profile = loadProfile(tenant);
   if (profile) {
+    // Never independent. The profile is the claim being checked, not evidence
+    // for it.
     collected.push({
       source: "profile",
+      independent: false,
       values: {
-        name: profile.name,
-        phone: profile.phone ?? "",
-        street: profile.address.street ?? "",
-        city: profile.address.city ?? "",
-        region: profile.address.region ?? "",
-        postalCode: profile.address.postalCode ?? "",
+        name: plain(profile.name),
+        phone: plain(profile.phone),
+        street: plain(profile.address.street),
+        city: plain(profile.address.city),
+        region: plain(profile.address.region),
+        postalCode: plain(profile.address.postalCode),
       },
     });
   }
 
-  const website = readIntake(tenant, "website.json");
-  if (website) collected.push({ source: "website crawl", values: fromEntity(website.entity) });
-  else notes.push("No website crawl yet, so the site's own details were not compared.");
-
-  const places = readIntake(tenant, "places.json");
-  if (places) collected.push({ source: "Google", values: fromEntity(places.entity) });
-  else notes.push("No Google Places data yet — the most valuable comparison is missing.");
-
+  // Read the live site first, because whether our markup is published there
+  // determines whether the crawl's JSON-LD values are independent evidence.
+  let ourMarkupIsLive = false;
   if (!options?.skipLive && settings.domain) {
     const live = await fromLiveSite(settings.domain);
-    if (live) collected.push({ source: "live site markup", values: live });
+    if (live) {
+      ourMarkupIsLive = live.isOurs;
+      collected.push({
+        source: live.isOurs ? "live site markup (ours)" : "live site markup",
+        independent: !live.isOurs,
+        values: live.values,
+      });
+    }
+  }
+
+  const website = readIntake(tenant, "website.json");
+  if (website) {
+    collected.push({ source: "website crawl", independent: true, values: fromEntity(website.entity) });
+  } else {
+    notes.push("No website crawl yet, so the site's own details were not compared.");
+  }
+
+  const places = readIntake(tenant, "places.json");
+  if (places) {
+    collected.push({ source: "Google", independent: true, values: fromEntity(places.entity) });
+  } else {
+    notes.push("No Google Places data yet — the most valuable comparison is missing.");
   }
 
   const findings: NapFinding[] = [];
@@ -241,12 +321,27 @@ export async function auditNap(tenant: string, options?: { skipLive?: boolean })
     const values: NapValue[] = [];
 
     for (const entry of collected) {
-      const raw = (entry.values[field] ?? "").trim();
+      const picked = entry.values[field];
+      const raw = (picked?.value ?? "").trim();
       // Absent is not a conflict. A source that says nothing about a field
       // disagrees with nobody, and flagging it would turn every thin profile
       // into a wall of false findings.
       if (!raw) continue;
-      values.push({ source: entry.source, raw, key: normalize(field, raw) });
+
+      // A crawl value lifted from JSON-LD is only independent while the JSON-LD
+      // on that page is somebody else's. Once our snippet is live, the crawler
+      // is reading our own claim back to us.
+      const echoed =
+        entry.source === "website crawl" &&
+        ourMarkupIsLive &&
+        /json-?ld/i.test(picked?.method ?? "");
+
+      values.push({
+        source: echoed ? "website crawl (our markup)" : entry.source,
+        raw,
+        key: normalize(field, raw),
+        independent: entry.independent && !echoed,
+      });
     }
 
     if (values.length < 2) continue;
@@ -262,10 +357,35 @@ export async function auditNap(tenant: string, options?: { skipLive?: boolean })
     // often keep, so it belongs at the top of the comparison.
     const groups = [...byKey.values()].sort((a, b) => b.sources.length - a.sources.length);
 
-    findings.push({ field, agrees: groups.length === 1, severity, values, groups });
+    // Agreement between our profile and an echo of our profile proves nothing.
+    // Corroboration requires a source that did not get the value from us.
+    const profileKey = values.find((value) => value.source === "profile")?.key;
+    const corroborated = values.some(
+      (value) => value.independent && (!profileKey || value.key === profileKey)
+    );
+
+    findings.push({
+      field,
+      agrees: groups.length === 1,
+      corroborated,
+      severity,
+      values,
+      groups,
+    });
   }
 
   const conflicts = findings.filter((finding) => !finding.agrees).length;
+  const uncorroborated = findings.filter((finding) => finding.agrees && !finding.corroborated);
+
+  if (uncorroborated.length > 0) {
+    notes.push(
+      `${uncorroborated.length} field(s) agree everywhere but have no independent ` +
+        `confirmation: ${uncorroborated.map((finding) => finding.field).join(", ")}. ` +
+        `Our markup is live on the site, so the crawl and the live-markup check are ` +
+        `reading our own values back. Only Google and non-JSON-LD page content count ` +
+        `as evidence once that is true.`
+    );
+  }
 
   if (collected.length < 2) {
     notes.push(
@@ -290,10 +410,22 @@ async function main(): Promise<void> {
   console.log(`  conflicts: ${report.conflicts}\n`);
 
   for (const finding of report.findings) {
-    const mark = finding.agrees ? "ok  " : finding.severity === "high" ? "HIGH" : "med ";
+    const mark = !finding.agrees
+      ? finding.severity === "high"
+        ? "HIGH"
+        : "med "
+      : finding.corroborated
+        ? "ok  "
+        : "weak";
     console.log(`  ${mark}  ${finding.field}`);
     if (finding.agrees) {
+      const independent = finding.values.filter((value) => value.independent).length;
       console.log(`        all ${finding.values.length} source(s) agree: ${finding.groups[0].raw}`);
+      console.log(
+        `        ${independent} independent — ${
+          independent === 0 ? "nothing outside our own data confirms this" : "confirmed"
+        }`
+      );
     } else {
       for (const group of finding.groups) {
         console.log(`        ${group.raw}`);
