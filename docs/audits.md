@@ -128,9 +128,28 @@ lookup, and a stronger claim, because the business published it. Share widgets
 and bare homepage links are excluded — a "share on Facebook" button says nothing
 about having a page.
 
-**What is manual:** eight directories with prefilled search links, roughly ten
+**What is manual:** fifteen directories with prefilled search links, roughly ten
 seconds each. Yelp, BBB, Angi, Facebook, Apple Maps, Bing Places, Nextdoor,
-Thumbtack.
+Thumbtack, Yellow Pages, HomeAdvisor, Porch, Trustpilot, Chamber of Commerce,
+MapQuest, Foursquare.
+
+The list is rendered on the Discoverability page as soon as it loads — the audit
+is pure file reads, so there is nothing to defer behind a button, and which
+directories get checked should not be something you click to discover.
+
+Add one by adding an entry to `src/audit/directories.ts`: hostnames, a line on
+why it matters, and a search-URL builder. It appears in the card automatically.
+
+**Deliberately excluded** — Hotfrog, Brownbook, Cylex, EZlocal, Nicelocal,
+Manta, Superpages, Citysearch. That long tail is what citation packages pad
+their numbers with. Citation *count* was a local-pack ranking signal in the SEO
+era; it is not what an answer engine retrieves, and a card showing twenty
+directories with eighteen unknowns is noise.
+
+**Where a platform's own search cannot be verified, the link is a Google
+`site:` query instead.** HomeAdvisor is the current case. A guessed search URL
+that 404s looks exactly like an absent listing, which is the one thing this
+audit must never imply.
 
 ### Why directories matter
 

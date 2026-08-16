@@ -96,7 +96,79 @@ export const DIRECTORIES: Directory[] = [
     why: "Another home-services aggregator that ranks on the same queries.",
     search: (business, where) => `https://www.thumbtack.com/search?q=${q(business)}`,
   },
+  {
+    id: "yellowpages",
+    name: "Yellow Pages",
+    hosts: ["yellowpages.com", "yp.com"],
+    why: "Still ranks for \"X in Y\" queries and is still scraped by other aggregators.",
+    search: (business, where) =>
+      `https://www.yellowpages.com/search?search_terms=${q(business)}&geo_location_terms=${q(where)}`,
+  },
+  {
+    id: "homeadvisor",
+    name: "HomeAdvisor",
+    hosts: ["homeadvisor.com"],
+    why: "Merged with Angi, but its profiles still exist and still rank separately.",
+    // Google site: search rather than HomeAdvisor's own. Its profile URLs are
+    // category paths with no documented search endpoint, and a guessed URL that
+    // 404s looks exactly like an absent listing — the failure this audit exists
+    // to avoid. A site: query cannot be wrong.
+    search: (business, where) =>
+      `https://www.google.com/search?q=${q(`site:homeadvisor.com "${business}" ${where}`)}`,
+  },
+  {
+    id: "porch",
+    name: "Porch",
+    hosts: ["porch.com"],
+    why: "Home-services marketplace, well indexed for local trade queries.",
+    search: (business, where) => `https://porch.com/search?q=${q(`${business} ${where}`)}`,
+  },
+  {
+    id: "trustpilot",
+    name: "Trustpilot",
+    hosts: ["trustpilot.com"],
+    why: "Review platform increasingly cited in AI answers, and independent of Google.",
+    search: (business, where) => `https://www.trustpilot.com/search?query=${q(business)}`,
+  },
+  {
+    id: "chamber",
+    name: "Chamber of Commerce",
+    hosts: ["chamberofcommerce.com"],
+    why: "A genuine local authority signal, and usually cheap to obtain.",
+    search: (business, where) =>
+      `https://www.chamberofcommerce.com/search?what=${q(business)}&where=${q(where)}`,
+  },
+  {
+    id: "mapquest",
+    name: "MapQuest",
+    hosts: ["mapquest.com"],
+    why: "Little direct traffic, but its data is redistributed to other services.",
+    search: (business, where) => `https://www.mapquest.com/search/results?query=${q(`${business} ${where}`)}`,
+  },
+  {
+    id: "foursquare",
+    name: "Foursquare",
+    hosts: ["foursquare.com"],
+    why: "Diminished as a destination, still an aggregator other platforms pull from.",
+    search: (business, where) =>
+      `https://foursquare.com/explore?q=${q(business)}&near=${q(where)}`,
+  },
 ];
+
+/**
+ * Deliberately excluded, so nobody adds them back thinking it was an oversight:
+ * Hotfrog, Brownbook, Cylex, EZlocal, Nicelocal, Manta, Superpages, Citysearch.
+ *
+ * These are the long tail that citation packages pad their numbers with. They
+ * inflate a citation count, which was a local-pack ranking signal in the SEO
+ * era and is not what an answer engine retrieves. A card listing twenty
+ * directories with eighteen unknowns is noise, and noise gets ignored — the
+ * same reason this audit reports "unknown" rather than guessing.
+ *
+ * Evidence from the first Tier 1 test (OPEN-QUESTIONS 7.9): of the five sources
+ * Perplexity cited for competing businesses, four were the businesses' own
+ * websites and the fifth was BBB. Not a long tail.
+ */
 
 /** Which directory a URL belongs to, if any. */
 export function directoryFor(url: string): Directory | null {

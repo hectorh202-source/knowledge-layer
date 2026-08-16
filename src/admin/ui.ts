@@ -215,6 +215,48 @@ function statusPill(it){
   return it.published ? '<span class="pill live">live</span>' : '<span class="pill ok">approved</span>';
 }
 
+/**
+ * Which directories are checked, and where each one stands.
+ *
+ * Rendered from the client payload rather than behind a button. The audit is
+ * pure file reads, so there is nothing to defer, and "which eight?" should not
+ * be a question you have to click to answer.
+ */
+function directoriesCard(){
+  const d = detail.directories;
+  if(!d) return "";
+
+  const rows = d.entries.map(e=>
+    '<tr><td>'+(e.state==="found"
+        ? '<span class="pill ok">found</span>'
+        : '<span class="pill wait">unknown</span>')+'</td>'+
+      '<td><div class="primary">'+esc(e.name)+'</div><div class="secondary">'+esc(e.why)+'</div></td>'+
+      '<td class="meta">'+(e.state==="found"
+        ? '<a href="'+esc(e.url)+'" target="_blank" rel="noopener">open profile ↗</a>'+
+          '<div class="secondary">'+esc(e.via)+'</div>'
+        : '<a href="'+esc(e.searchUrl)+'" target="_blank" rel="noopener">search ↗</a>')+
+      '</td></tr>').join("");
+
+  return '<div class="card"><div class="card-h"><h2>Directory listings</h2>'+
+    '<span class="meta">'+d.found+' of '+d.entries.length+' confirmed</span></div>'+
+    '<div class="card-b" style="padding-bottom:0">'+
+    '<div class="sub">When someone asks an assistant for the best plumber in a city, the pages it retrieves are overwhelmingly aggregators. '+
+    'Those pages are the candidate set the answer is built from, so a business absent from them was never in the running, however good the markup on its own site.</div>'+
+    '<div class="sub">Searching '+esc(d.business)+(d.where?' in '+esc(d.where):"")+'. '+
+    'Found a listing? Paste its URL into <strong>Business profile &rarr; Other profiles</strong> &mdash; that publishes it as <code>sameAs</code>, '+
+    'flips this row to found, and adds it as a source for the NAP comparison.</div></div>'+
+    '<table><tr><th></th><th>Directory</th><th></th></tr>'+rows+'</table>'+
+    '<div class="card-b">'+
+    (d.otherProfiles.length
+      ? '<div class="sub" style="margin:0 0 .5rem">Other profile links on the site: '+
+        d.otherProfiles.map(u=>'<a href="'+esc(u)+'" target="_blank" rel="noopener">'+esc(u)+'</a>').join(", ")+'</div>'
+      : "")+
+    d.notes.map(n=>'<div class="sub" style="margin:0 0 .5rem">'+esc(n)+'</div>').join("")+
+    '<div class="sub" style="margin:0"><strong>&ldquo;Unknown&rdquo; is not &ldquo;not listed&rdquo;.</strong> These platforms refuse automated searches &mdash; '+
+    'Yelp returns 403 even for profiles that exist &mdash; so reporting an absence would frequently be a lie. Each search link is about ten seconds by hand.</div>'+
+    '</div></div>';
+}
+
 function contentView(kind){
   const sec = detail.sections.find(s=>s.kind===kind);
   const rows = sec.items.map(it=>
@@ -474,13 +516,7 @@ async function discoverabilityView(){
       'An engine that sees two different phone numbers has no way to know they are one business, so neither record accumulates the corroboration that earns a citation.</div></div>'+
       '<div id="napOut" class="card-b"><div class="sub" style="margin:0">Not compared yet.</div></div>'+
     '</div>'+
-    '<div class="card"><div class="card-h"><h2>Directory listings</h2>'+
-      '<button class="btn primary" id="runDirs">Check</button></div>'+
-      '<div class="card-b" style="padding-bottom:0"><div class="sub">When someone asks an assistant for the best plumber in a city, the pages it retrieves are '+
-      'overwhelmingly aggregators &mdash; Yelp, Angi, BBB. Those pages are the candidate set the answer is built from, so a business absent from them was never in the running, '+
-      'however good the markup on its own site.</div></div>'+
-      '<div id="dirsOut" class="card-b"><div class="sub" style="margin:0">Not checked yet.</div></div>'+
-    '</div>'+
+    directoriesCard()+
     '<div class="card"><div class="card-h"><h2>Needs a person</h2><span class="meta">'+doneManual+' of '+t.manualChecks.length+' confirmed</span></div>'+
       '<div class="card-b" style="padding-bottom:0"><div class="sub">These need an account login or judgment. Unchecked means unverified, not failing.</div></div>'+
       '<table>'+manualRows+'</table></div>';
@@ -866,36 +902,6 @@ document.addEventListener("click", async e => {
       await navigator.clipboard.writeText(
         '<script type="application/ld+json">\n'+json.replace(/<\//g,"<\\/")+'\n<\/script>');
       toast("Snippet copied — paste it into the site's <head>.");
-      return;
-    }
-
-    if(t.id==="runDirs"){
-      const out=$("dirsOut"); out.innerHTML='<div class="sub" style="margin:0">Checking…</div>';
-      t.disabled=true;
-      let r; try { r = await api("/clients/"+current+"/directories"); } finally { t.disabled=false; }
-
-      const rows = r.entries.map(e=>
-        '<tr><td>'+(e.state==="found"
-            ? '<span class="pill ok">found</span>'
-            : '<span class="pill wait">unknown</span>')+'</td>'+
-          '<td><div class="primary">'+esc(e.name)+'</div><div class="secondary">'+esc(e.why)+'</div></td>'+
-          '<td class="meta">'+(e.state==="found"
-            ? '<a href="'+esc(e.url)+'" target="_blank" rel="noopener">open profile ↗</a>'+
-              '<div class="secondary">'+esc(e.via)+'</div>'
-            : '<a href="'+esc(e.searchUrl)+'" target="_blank" rel="noopener">search ↗</a>')+
-          '</td></tr>').join("");
-
-      out.innerHTML =
-        '<div class="banner '+(r.found>0?"warn":"bad")+'"><strong>'+r.found+' of '+r.entries.length+
-          ' confirmed.</strong> Searching '+esc(r.business)+(r.where?' in '+esc(r.where):"")+'.</div>'+
-        '<table><tr><th></th><th>Directory</th><th></th></tr>'+rows+'</table>'+
-        (r.otherProfiles.length
-          ? '<div class="sub" style="margin:.5rem 0 0">Other profile links on the site: '+
-            r.otherProfiles.map(u=>'<a href="'+esc(u)+'" target="_blank" rel="noopener">'+esc(u)+'</a>').join(", ")+'</div>'
-          : "")+
-        r.notes.map(n=>'<div class="sub" style="margin:.5rem 0 0">'+esc(n)+'</div>').join("")+
-        '<div class="sub" style="margin:.5rem 0 0"><strong>&ldquo;Unknown&rdquo; is not &ldquo;not listed&rdquo;.</strong> These platforms refuse automated '+
-        'searches &mdash; Yelp returns 403 even for profiles that exist &mdash; so reporting an absence would frequently be a lie. Each search link is about ten seconds by hand.</div>';
       return;
     }
 

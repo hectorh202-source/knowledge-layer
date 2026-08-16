@@ -285,6 +285,11 @@ export function createAdminRouter(): Router {
       sections,
       expiredCredentials: expired,
       pendingIntake: countPendingIntake(slug),
+      // Included up front rather than behind a button. The audit is pure file
+      // reads with no network call, so there is no cost to it, and which
+      // directories get checked should not be something you have to click to
+      // discover.
+      directories: auditDirectories(slug),
     });
   });
 
