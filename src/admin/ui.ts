@@ -364,7 +364,7 @@ function publishingView(){
 }
 
 function settingsView(){
-  const s = detail.settings, L = s.links||{};
+  const s = detail.settings, L = s.links||{}, S = s.sources||{};
   const link=(k,l,ph)=>'<label class="f"><span>'+l+
     (L[k]?' &nbsp;<a href="'+esc(L[k])+'" target="_blank" rel="noopener">open ↗</a>':"")+
     '</span><input data-l="'+k+'" value="'+esc(L[k]||"")+'" placeholder="'+esc(ph)+'"></label>';
@@ -377,6 +377,18 @@ function settingsView(){
       ["LocalBusiness","Plumber","HVACBusiness","Electrician","RoofingContractor","GeneralContractor","HomeAndConstructionBusiness"]
         .map(t=>'<option '+(t===s.schemaType?"selected":"")+'>'+t+'</option>').join("")+'</select></label>'+
     '<label class="f"><span>Public API URL (once deployed)</span><input data-s="apiBaseUrl" value="'+esc(s.apiBaseUrl)+'" placeholder="https://api.'+esc(s.domain)+'"></label>'+
+  '</div></div>'+
+
+  '<div class="card"><div class="card-h"><h2>Content sources</h2></div><div class="card-b">'+
+    '<div class="sub">Point the extractor straight at the right pages. More accurate than guessing '+
+    'at URL conventions — a site that says &quot;What We Do&quot; instead of &quot;Services&quot; finds nothing otherwise. '+
+    'Leave blank to fall back to the heuristics.</div>'+
+    '<label class="f"><span>Services page URL'+
+      (S.servicesPageUrl?' &nbsp;<a href="'+esc(S.servicesPageUrl)+'" target="_blank" rel="noopener">open ↗</a>':"")+
+      '</span><input data-src="servicesPageUrl" value="'+esc(S.servicesPageUrl||"")+'" placeholder="https://'+esc(s.domain)+'/what-we-do"></label>'+
+    '<label class="f"><span>Service areas page URL'+
+      (S.serviceAreasPageUrl?' &nbsp;<a href="'+esc(S.serviceAreasPageUrl)+'" target="_blank" rel="noopener">open ↗</a>':"")+
+      '</span><input data-src="serviceAreasPageUrl" value="'+esc(S.serviceAreasPageUrl||"")+'" placeholder="https://'+esc(s.domain)+'/coverage"></label>'+
   '</div></div>'+
 
   '<div class="card"><div class="card-h"><h2>Accounts &amp; access</h2></div><div class="card-b">'+
@@ -506,6 +518,7 @@ document.addEventListener("click", async e => {
       const body={links:{}};
       document.querySelectorAll("[data-s]").forEach(el=>body[el.dataset.s]=el.value);
       document.querySelectorAll("[data-l]").forEach(el=>body.links[el.dataset.l]=el.value.trim());
+      body.sources={}; document.querySelectorAll("[data-src]").forEach(el=>body.sources[el.dataset.src]=el.value.trim());
       await api("/clients/"+current+"/settings",{method:"PATCH",body:JSON.stringify(body)});
       toast("Settings saved."); await refresh(); return;
     }

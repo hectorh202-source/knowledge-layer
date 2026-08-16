@@ -117,7 +117,13 @@ async function main(): Promise<void> {
   console.log(`  max pages : ${maxPages}`);
   console.log(`  delay     : ${delayMs}ms between requests (robots.txt respected)\n`);
 
-  const result = await crawlSite({ site: normalized, maxPages, delayMs });
+  const result = await crawlSite({
+    site: normalized,
+    maxPages,
+    delayMs,
+    servicesPageUrl: settings?.sources.servicesPageUrl || undefined,
+    serviceAreasPageUrl: settings?.sources.serviceAreasPageUrl || undefined,
+  });
 
   summarize(result);
 

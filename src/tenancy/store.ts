@@ -64,6 +64,27 @@ export const EMPTY_LINKS: TenantLinks = {
   cmsUrl: "",
 };
 
+/**
+ * Pages the extractor should read directly, when someone knows where they are.
+ *
+ * Guessing at URL conventions and nav wording fails on any site that words
+ * things its own way — "What We Do" instead of "/services" is enough to find
+ * nothing. Whoever onboards a client can see the right page in ten seconds, so
+ * a pasted URL is more accurate than any amount of pattern matching, costs
+ * nothing, and adds no dependency.
+ *
+ * Optional throughout. Left blank, extraction falls back to the heuristics.
+ */
+export interface TenantSources {
+  servicesPageUrl: string;
+  serviceAreasPageUrl: string;
+}
+
+export const EMPTY_SOURCES: TenantSources = {
+  servicesPageUrl: "",
+  serviceAreasPageUrl: "",
+};
+
 export interface TenantSettings {
   slug: string;
   name: string;
@@ -73,6 +94,7 @@ export interface TenantSettings {
   schemaType: string;
   /** Public URL of this tenant's API, once deployed. */
   apiBaseUrl: string;
+  sources: TenantSources;
   links: TenantLinks;
   createdAt: string;
   notes: string;
@@ -140,7 +162,11 @@ export function readSettings(slug: string): TenantSettings | null {
   try {
     const parsed = JSON.parse(fs.readFileSync(settingsPath(slug), "utf8")) as TenantSettings;
     // Backfill so settings files written before a field existed still load.
-    return { ...parsed, links: { ...EMPTY_LINKS, ...(parsed.links ?? {}) } };
+    return {
+      ...parsed,
+      sources: { ...EMPTY_SOURCES, ...(parsed.sources ?? {}) },
+      links: { ...EMPTY_LINKS, ...(parsed.links ?? {}) },
+    };
   } catch {
     return null;
   }
@@ -208,6 +234,7 @@ export function createTenant(input: {
     domain,
     schemaType: input.schemaType || "LocalBusiness",
     apiBaseUrl: "",
+    sources: { ...EMPTY_SOURCES },
     links: { ...EMPTY_LINKS },
     createdAt: new Date().toISOString(),
     notes: "",
@@ -256,6 +283,7 @@ export function migrateLegacyContent(slug = "titanz"): boolean {
     domain,
     schemaType: "LocalBusiness",
     apiBaseUrl: "",
+    sources: { ...EMPTY_SOURCES },
     links: { ...EMPTY_LINKS },
     createdAt: new Date().toISOString(),
     notes: "Migrated from the single-client layout.",

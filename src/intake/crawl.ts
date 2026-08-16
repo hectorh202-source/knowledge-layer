@@ -10,11 +10,14 @@ import {
   extractContact,
   extractCredentials,
   extractFaqs,
+  extractHubLinks,
   extractMeta,
   extractServices,
+  pageHrefs,
 } from "./html";
 import {
   emptyEntityCandidates,
+  provenance,
   type IntakeResult,
 } from "./types";
 
@@ -49,6 +52,9 @@ export interface CrawlOptions {
   site: string;
   maxPages: number;
   delayMs: number;
+  /** A page someone has pointed us at, read directly rather than guessed. */
+  servicesPageUrl?: string;
+  serviceAreasPageUrl?: string;
 }
 
 function normalizeUrl(href: string, base: string): string | null {
@@ -129,6 +135,7 @@ export async function crawlSite(options: CrawlOptions): Promise<IntakeResult> {
   const queue: string[] = [origin];
   const seen = new Set<string>([dedupeKey(origin)]);
   const externalHosts = new Map<string, number>();
+  let homepageHtml: string | null = null;
   let structuredDataFound = false;
 
   while (queue.length > 0 && result.pagesFetched.length < options.maxPages) {
@@ -153,6 +160,7 @@ export async function crawlSite(options: CrawlOptions): Promise<IntakeResult> {
     }
 
     result.pagesFetched.push(url);
+    if (homepageHtml === null) homepageHtml = page.html;
 
     // --- structured data first; it outranks everything heuristic ------------
     const blocks = parseJsonLdBlocks(page.html);
@@ -194,6 +202,56 @@ export async function crawlSite(options: CrawlOptions): Promise<IntakeResult> {
       seen.add(key);
       queue.push(next);
     });
+  }
+
+  // --- pages we were pointed at --------------------------------------------
+  // Read last, so the homepage is available as the site-furniture baseline.
+  const furniture = homepageHtml ? pageHrefs(homepageHtml, origin) : new Set<string>();
+
+  for (const hub of [
+    { url: options.servicesPageUrl, kind: "services" as const },
+    { url: options.serviceAreasPageUrl, kind: "areas" as const },
+  ]) {
+    if (!hub.url) continue;
+
+    let page;
+    try {
+      page = await fetcher.get(hub.url);
+    } catch (error) {
+      result.pagesSkipped.push({
+        url: hub.url,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+      continue;
+    }
+
+    if (page.status !== 200) {
+      result.pagesSkipped.push({ url: hub.url, reason: `HTTP ${page.status}` });
+      result.notes.push(
+        `The configured ${hub.kind} page returned HTTP ${page.status}. Check the URL in Settings.`
+      );
+      continue;
+    }
+
+    result.pagesFetched.push(hub.url);
+    const links = extractHubLinks(page.html, hub.url, furniture, hub.kind);
+
+    if (links.length === 0) {
+      result.notes.push(
+        `The configured ${hub.kind} page had no links unique to it. Either it lists items as ` +
+          `plain text rather than links, or the URL points at a nav page.`
+      );
+      continue;
+    }
+
+    const provenanceFor = provenance("website", hub.url, "configured " + hub.kind + " page", "high");
+    if (hub.kind === "services") {
+      result.services.push(
+        ...links.map((link) => ({ name: link.name, description: null, provenance: provenanceFor }))
+      );
+    } else {
+      result.areas.push(...links.map((link) => ({ name: link.name, provenance: provenanceFor })));
+    }
   }
 
   // A single page with no internal links is almost always a placeholder or a

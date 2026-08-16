@@ -244,6 +244,82 @@ export function extractServices(html: string, url: string): ServiceCandidate[] {
   return [...found.values()];
 }
 
+/**
+ * Reads a page someone has pointed us at — a services or service-areas hub.
+ *
+ * Far more reliable than guessing at URL conventions, because the page is known
+ * rather than inferred. The one wrinkle is that a hub page also carries the
+ * site's own menu and footer, so its links include About, Careers, Contact.
+ * Those also appear on the homepage; the ones unique to this page are the
+ * actual list. That comparison does the filtering no word list can.
+ */
+export function extractHubLinks(
+  html: string,
+  url: string,
+  homepageHrefs: Set<string>,
+  label: string
+): { name: string; href: string }[] {
+  const $ = cheerio.load(html);
+  const found = new Map<string, { name: string; href: string }>();
+
+  $("a[href]").each((_, element) => {
+    const rawHref = $(element).attr("href") ?? "";
+    const text = $(element).text().replace(/\s+/g, " ").trim();
+
+    if (!text || text.length < 3 || text.length > 60) return;
+    // A digit or currency symbol means a phone number, price, or address.
+    if (/[\d$]/.test(text)) return;
+
+    // A link inside a paragraph is part of a sentence, not a list entry. This
+    // is what separates a genuine index page from a prose page that happens to
+    // link out — without it, "pipes", "grease", and "customer care" all read as
+    // services.
+    if ($(element).closest("p").length > 0) return;
+
+    // All-caps text is a call to action ("CONTACT US", "BOOK NOW"), not an item.
+    if (text === text.toUpperCase() && /[A-Z]{3}/.test(text)) return;
+
+    let absolute: string;
+    try {
+      const parsed = new URL(rawHref, url);
+      parsed.hash = "";
+      parsed.search = "";
+      absolute = parsed.toString();
+    } catch {
+      return;
+    }
+
+    // Site furniture: anything the homepage also links to.
+    if (homepageHrefs.has(absolute)) return;
+    // Self-links and anchors back to this page.
+    if (absolute.replace(/\/$/, "") === url.replace(/\/$/, "")) return;
+
+    const key = text.toLowerCase();
+    if (!found.has(key)) found.set(key, { name: text, href: absolute });
+  });
+
+  return [...found.values()];
+}
+
+/** Absolute, normalized hrefs on a page — used as the furniture baseline. */
+export function pageHrefs(html: string, url: string): Set<string> {
+  const $ = cheerio.load(html);
+  const hrefs = new Set<string>();
+
+  $("a[href]").each((_, element) => {
+    try {
+      const parsed = new URL($(element).attr("href") ?? "", url);
+      parsed.hash = "";
+      parsed.search = "";
+      hrefs.add(parsed.toString());
+    } catch {
+      // Malformed href — skip.
+    }
+  });
+
+  return hrefs;
+}
+
 function dedupeByQuestion(faqs: FaqCandidate[]): FaqCandidate[] {
   const seen = new Set<string>();
   return faqs.filter((faq) => {
