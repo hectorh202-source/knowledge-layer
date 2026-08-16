@@ -51,6 +51,7 @@ unless `TENANT_SLUG` is set in `.env`.
 | `npm run vocabulary:build` | Regenerate the schema.org subset from schema.org |
 | `npm run docs:check` | Verify these docs still match the code |
 | `npm run content:migrate` | Copy clients from disk into Supabase. `--dry-run`, `--tenant <slug>`, `--force` |
+| `npx tsx scripts/verify-migration.ts` | Compare every client on disk against Supabase. Read-only |
 | `npx tsx scripts/migrate-profile-fields.ts` | One-off migration. `--dry-run` supported |
 
 ## Environment variables
@@ -149,6 +150,7 @@ scripts/
   check-docs.ts              docs freshness check
   migrate-profile-fields.ts  one-off migration
   migrate-to-supabase.ts     copy clients from disk into the database
+  verify-migration.ts        compare the two stores, read-only
 supabase/migrations/         SQL schema
 docs/                        you are here
 ```
