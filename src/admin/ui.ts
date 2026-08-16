@@ -42,7 +42,20 @@ aside{background:var(--sidebar);color:var(--sidebar-ink);padding:1.1rem .8rem;
 .nav:hover{background:rgba(255,255,255,.06);color:#fff}
 .nav.on{background:var(--accent);color:#fff}
 .nav .badge{float:right;font-size:.72rem;opacity:.75}
-.client{display:flex;align-items:center;gap:.5rem}
+.client{display:flex;align-items:center;gap:.5rem;min-width:0}
+.switcher{display:flex;width:100%;align-items:center;justify-content:space-between;gap:.5rem;
+  background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:8px;
+  color:var(--sidebar-ink);padding:.55rem .6rem;margin:0 0 .5rem;cursor:pointer;text-align:left}
+.switcher:hover{background:rgba(255,255,255,.11);color:#fff}
+.switcher-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.switcher-hint{font-size:.72rem;opacity:.7;flex:none}
+.pick{display:flex;width:100%;align-items:center;justify-content:space-between;gap:.6rem;
+  background:none;border:0;border-bottom:1px solid var(--line);padding:.6rem .3rem;
+  cursor:pointer;text-align:left;font:inherit;color:inherit}
+.pick:hover{background:var(--hover,#f2f4f7)}
+.pick.on{background:var(--accent);color:#fff}
+.pick .sub{margin:0;font-size:.76rem}
+.pick.on .sub{color:rgba(255,255,255,.8)}
 .dot{width:7px;height:7px;border-radius:50%;flex:none;background:var(--muted)}
 .dot.ready{background:#3ddc84}.dot.blocked{background:#ff6b6b}
 /* main */
@@ -124,6 +137,18 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
   <main id="main"><div class="empty">Loading…</div></main>
 </div>
 
+<dialog id="clientPicker">
+  <div class="dlg-b">
+    <h2 style="margin-bottom:.6rem">Switch client</h2>
+    <input id="pickSearch" placeholder="Filter by name or domain" autocomplete="off">
+    <div id="pickList" style="margin-top:.7rem;max-height:52vh;overflow:auto"></div>
+  </div>
+  <div class="dlg-f">
+    <button class="btn" type="button" id="pickAdd">+ Add client</button>
+    <button class="btn" type="button" id="pickCancel">Cancel</button>
+  </div>
+</dialog>
+
 <dialog id="newClient">
   <div class="dlg-b">
     <h2 style="margin-bottom:.8rem">Add a client</h2>
@@ -158,6 +183,36 @@ const LABELS = {overview:"Overview",discoverability:"Discoverability",profile:"B
 
 let clients = [], current = null, view = "clients", detail = null;
 
+/**
+ * Where you are, kept in the URL.
+ *
+ * Without this the whole app lived in two JavaScript variables, so refreshing
+ * anywhere dropped you back onto the first client's overview — losing your place
+ * halfway through reviewing thirty-three services, which is exactly the moment
+ * someone hits reload.
+ *
+ * replaceState rather than pushState: it survives a refresh without turning
+ * every section click into a history entry to press Back through.
+ */
+const SYSTEM_VIEWS = ["status","clients"];
+
+function syncLocation(){
+  const next = SYSTEM_VIEWS.indexOf(view)!==-1 ? "#/"+view
+             : current ? "#/"+encodeURIComponent(current)+"/"+view
+             : "#/clients";
+  if(location.hash !== next) history.replaceState(null,"",next);
+}
+
+function parseLocation(){
+  const parts = location.hash.replace(/^#\/?/,"").split("/").filter(Boolean).map(decodeURIComponent);
+  if(parts.length === 0) return {};
+  if(parts.length === 1) return SYSTEM_VIEWS.indexOf(parts[0])!==-1 ? {view:parts[0]} : {slug:parts[0]};
+  return {slug:parts[0], view:parts[1]};
+}
+
+/** A URL can say anything. Only render a view that exists. */
+function validView(v){ return SECTIONS.indexOf(v)!==-1 || SYSTEM_VIEWS.indexOf(v)!==-1; }
+
 const esc = s => String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const $ = id => document.getElementById(id);
 
@@ -174,23 +229,33 @@ async function api(path,opts){
 async function loadClients(){ clients = (await api("/clients")).clients; renderNav(); }
 
 async function openClient(slug,section){
-  current = slug; view = section||"overview";
+  current = slug; view = validView(section) ? section : "overview";
   detail = await api("/clients/"+slug);
-  renderNav(); render();
+  syncLocation(); renderNav(); render();
 }
+
+/** Red when the profile is incomplete or discoverability is failing — both block being found. */
+function clientReady(c){ return c.blockingCount===0 && !(c.tier1 && c.tier1.failed>0); }
 
 function renderNav(){
   const nav = $("clientNav");
-  let html = '<div class="navlabel">Clients</div>';
-  for(const c of clients){
-    // Red when the profile is incomplete OR discoverability is failing —
-    // both block being found, so both should show at a glance.
-    const ready = c.blockingCount===0 && !(c.tier1 && c.tier1.failed>0);
-    html += '<button class="nav '+(current===c.slug&&view!=="status"&&view!=="clients"?"on":"")+'" data-client="'+esc(c.slug)+'">'+
-      '<span class="client"><span class="dot '+(ready?"ready":"blocked")+'"></span>'+esc(c.name)+'</span>'+
-      '<span class="badge">'+c.approvedCount+"/"+c.itemCount+'</span></button>';
+
+  // One client, not a list. A sidebar that grows with the roster is fine at two
+  // clients and unusable at twenty — the section links, which are what you
+  // actually navigate with, get pushed off the bottom.
+  const active = clients.find(c=>c.slug===current);
+  let html = '<div class="navlabel">Client</div>';
+
+  if(active){
+    html += '<button class="switcher" data-picker="1">'+
+      '<span class="client"><span class="dot '+(clientReady(active)?"ready":"blocked")+'"></span>'+
+      '<span class="switcher-name">'+esc(active.name)+'</span></span>'+
+      '<span class="switcher-hint">Change ▾</span></button>';
+  } else {
+    html += '<button class="switcher" data-picker="1">'+
+      '<span class="client"><span class="switcher-name">Select a client</span></span>'+
+      '<span class="switcher-hint">▾</span></button>';
   }
-  html += '<button class="nav" data-add="1">+ Add client</button>';
 
   if(current && detail){
     html += '<div class="navlabel">'+esc(detail.settings.name)+'</div>';
@@ -672,11 +737,13 @@ async function statusView(){
 
 function clientsView(){
   return '<h1>Clients</h1><div class="sub">'+clients.length+' configured. Adding one creates its own isolated content set.</div>'+
-  '<div class="card">'+(clients.length?'<table><tr><th>Client</th><th>Domain</th><th>Discoverability</th><th>Items</th><th>Approved</th><th>Live</th><th></th></tr>'+
+  '<div class="card"><div class="card-h"><h2>All clients</h2>'+
+    '<button class="btn primary" data-add="1">+ Add client</button></div>'+
+    (clients.length?'<table><tr><th>Client</th><th>Domain</th><th>Discoverability</th><th>Items</th><th>Approved</th><th>Live</th><th></th></tr>'+
     clients.map(c=>'<tr><td><span class="client"><span class="dot '+(c.blockingCount===0?"ready":"blocked")+'"></span><span class="primary">'+esc(c.name)+'</span></span></td>'+
     '<td class="meta">'+esc(c.domain||"—")+'</td><td class="meta">'+tier1Pill(c.tier1)+'</td><td class="meta">'+c.itemCount+'</td><td class="meta">'+c.approvedCount+
     '</td><td class="meta">'+c.publishedCount+'</td><td class="meta"><button class="btn" data-open="'+esc(c.slug)+'">Open</button></td></tr>').join("")+
-    '</table>':'<div class="empty">No clients yet. Add the first one from the sidebar.</div>')+'</div>';
+    '</table>':'<div class="empty">No clients yet. Add the first one above.</div>')+'</div>';
 }
 
 async function render(){
@@ -694,16 +761,53 @@ async function render(){
 
 async function refresh(){ detail = await api("/clients/"+current); await loadClients(); renderNav(); await render(); }
 
+/**
+ * The client switcher.
+ *
+ * Filtering is here rather than in the sidebar because the sidebar can only
+ * ever show one client now. At twenty clients a scroll is worse than a search
+ * box, and the box is the whole reason this can stay a single entry.
+ */
+function renderPickList(){
+  const q = ($("pickSearch").value||"").toLowerCase().trim();
+  const shown = clients.filter(c=>
+    !q || c.name.toLowerCase().indexOf(q)!==-1 || (c.domain||"").toLowerCase().indexOf(q)!==-1);
+
+  $("pickList").innerHTML = shown.length
+    ? shown.map(c=>{
+        const pending = c.itemCount - c.approvedCount;
+        const state = !clientReady(c)
+          ? (c.blockingCount>0 ? c.blockingCount+" blocking" : "checks failing")
+          : pending>0 ? pending+" awaiting approval" : "ready";
+        return '<button class="pick '+(c.slug===current?"on":"")+'" data-pick="'+esc(c.slug)+'">'+
+          '<span class="client"><span class="dot '+(clientReady(c)?"ready":"blocked")+'"></span>'+
+          '<span><div class="primary">'+esc(c.name)+'</div>'+
+          '<div class="sub">'+esc(c.domain||"no domain")+' · '+esc(state)+'</div></span></span>'+
+          '<span class="meta">'+c.approvedCount+"/"+c.itemCount+'</span></button>';
+      }).join("")
+    : '<div class="empty">No client matches "'+esc(q)+'".</div>';
+}
+
+function openPicker(){
+  $("pickSearch").value = "";
+  renderPickList();
+  $("clientPicker").showModal();
+  // Type straight into the filter, which is the point of having one.
+  $("pickSearch").focus();
+}
+
 // --- events ---------------------------------------------------------------
 document.addEventListener("click", async e => {
   const t = e.target.closest("button"); if(!t) return;
   try{
+    if(t.dataset.picker !== undefined){ openPicker(); return; }
+    if(t.dataset.pick){ $("clientPicker").close(); await openClient(t.dataset.pick); return; }
     if(t.dataset.client){ await openClient(t.dataset.client); return; }
     if(t.dataset.open){ await openClient(t.dataset.open); return; }
     if(t.dataset.add !== undefined){ $("newClient").showModal(); return; }
-    if(t.dataset.sec){ view = t.dataset.sec; renderNav(); await render(); return; }
-    if(t.dataset.goto){ view = t.dataset.goto; renderNav(); await render(); return; }
-    if(t.dataset.sys){ view = t.dataset.sys; current = t.dataset.sys==="clients"?current:current; renderNav(); await render(); return; }
+    if(t.dataset.sec){ view = t.dataset.sec; syncLocation(); renderNav(); await render(); return; }
+    if(t.dataset.goto){ view = t.dataset.goto; syncLocation(); renderNav(); await render(); return; }
+    if(t.dataset.sys){ view = t.dataset.sys; syncLocation(); renderNav(); await render(); return; }
 
     if(t.dataset.act){
       const i = t.dataset.i, act = t.dataset.act;
@@ -824,7 +928,7 @@ document.addEventListener("click", async e => {
     if(t.id==="deleteClient"){
       if(!confirm("Delete "+detail.settings.name+" and all their content? This cannot be undone.")) return;
       await api("/clients/"+current,{method:"DELETE"});
-      current=null; view="clients"; await loadClients(); await render(); toast("Client deleted."); return;
+      current=null; view="clients"; syncLocation(); await loadClients(); await render(); toast("Client deleted."); return;
     }
 
     if(t.id==="runAudit"){
@@ -982,6 +1086,21 @@ document.addEventListener("change", async e => {
 
 $("ncCancel").addEventListener("click", closeNewClient);
 
+$("pickSearch").addEventListener("input", renderPickList);
+$("pickCancel").addEventListener("click", ()=>$("clientPicker").close());
+$("pickAdd").addEventListener("click", ()=>{ $("clientPicker").close(); $("newClient").showModal(); });
+
+// Enter picks the only remaining match, so filtering to one client and pressing
+// return is the whole interaction.
+$("pickSearch").addEventListener("keydown", async e=>{
+  if(e.key !== "Enter") return;
+  const only = $("pickList").querySelectorAll("[data-pick]");
+  if(only.length !== 1) return;
+  e.preventDefault();
+  $("clientPicker").close();
+  await openClient(only[0].dataset.pick);
+});
+
 // Buttons are type="button" and the dialog holds no form, so nothing submits on
 // its own. The dialog closes only after the client actually exists — otherwise
 // a failed create would close it and swallow the reason.
@@ -1001,7 +1120,20 @@ $("ncGo").addEventListener("click", async () => {
 
 (async()=>{
   await loadClients();
-  if(clients.length){ await openClient(clients[0].slug); } else { view="clients"; render(); }
+
+  // Restore where you were. A stale or hand-edited URL must not strand anyone,
+  // so a slug that no longer exists falls through to the normal default.
+  const want = parseLocation();
+
+  if(want.slug && clients.some(c=>c.slug===want.slug)){
+    await openClient(want.slug, want.view);
+  } else if(want.view && SYSTEM_VIEWS.indexOf(want.view)!==-1){
+    view = want.view; syncLocation(); renderNav(); await render();
+  } else if(clients.length){
+    await openClient(clients[0].slug);
+  } else {
+    view = "clients"; syncLocation(); render();
+  }
 })();
 </script>
 </body>
