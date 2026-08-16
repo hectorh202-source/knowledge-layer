@@ -165,14 +165,6 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 
 /* Optimistic rows. The change is already on screen; this says it is not
    confirmed yet, without moving anything. */
-/* Stripe's card iframe. Styled to sit in a normal field so it does not look
-   bolted on, but the input itself belongs to Stripe — the number never enters
-   this page's DOM, which is what keeps the app out of PCI scope. */
-#cardField{border:1px solid var(--line);border-radius:7px;padding:.55rem;background:var(--bg)}
-#cardField.StripeElement--focus{border-color:var(--accent)}
-#cardField.StripeElement--invalid{border-color:var(--bad)}
-#cardErr{color:var(--bad);font-size:.8rem;margin-top:.4rem;min-height:1rem}
-
 tr.pending{opacity:.55}
 tr.pending .btn{pointer-events:none}
 
@@ -239,8 +231,6 @@ tr.pending .btn{pointer-events:none}
     <button class="btn primary" type="button" id="ncGo">Create</button>
   </div>
 </dialog>
-
-<script src="https://js.stripe.com/v3/"></script>
 
 <div id="progress"></div>
 
@@ -1196,138 +1186,17 @@ async function clientBillingView(){
         '<label class="f"><span>Plan</span><select id="bPlan">'+planOptions+'</select></label>'+
         '<label class="f"><span>Setup fee</span><select id="bSetup">'+setupOptions+'</select></label>'+
       '</div>'+
-      '<label class="f"><span>Their email'+
-        (st.canTakeCard?' <span class="meta">required to key a card — the receipt goes here</span>'
-                       :' <span class="meta">optional — they can type it at checkout</span>')+'</span>'+
+      '<label class="f"><span>Their email <span class="meta">optional — they can type it at checkout</span></span>'+
         '<input id="bEmail" type="email" value="'+esc(acc?acc.contactEmail:"")+'" placeholder="accounts@example.com"></label>'+
       '<div class="row">'+
         '<button class="btn primary" id="startBilling">'+(link?"Replace the link":"Create payment link")+'</button>'+
-        (st.canTakeCard?'<button class="btn quiet" id="showCard">Key a card instead</button>':'')+
+        '<button class="btn quiet" id="keyCard">Key a card in Stripe ↗</button>'+
       '</div>'+
       (link?'<div class="sub" style="margin:.7rem 0 0">The current link stops working, so nobody can pay the old price by accident.</div>':'')+
-    '</div></div>'+
-
-    (st.canTakeCard
-      ? '<div class="card" id="cardCard" hidden><div class="card-h"><h2>Card over the phone</h2>'+
-          '<span class="meta">'+(st.mode==="live"?"live — real money":"test mode")+'</span></div><div class="card-b">'+
-          '<div class="sub" style="margin:0 0 .7rem">Key their card while you have them on the call. '+
-          'Charges the setup fee and the first month now, then monthly on the same card. '+
-          '<strong>Stripe emails the receipt.</strong></div>'+
-          '<div class="sub" style="margin:0 0 .9rem">The field below is served by Stripe, not by this app &mdash; '+
-          'the number never reaches our server, which is what keeps card data out of it entirely. '+
-          'Do not write the number down anywhere.</div>'+
-          '<label class="f"><span>Name on the card</span><input id="cardName" placeholder="As it appears on the card"></label>'+
-          '<label class="f"><span>Card</span><div id="cardField"></div></label>'+
-          '<div id="cardErr"></div>'+
-          '<div class="row" style="margin-top:.5rem">'+
-            '<button class="btn primary" id="chargeCard">Charge and start</button>'+
-            '<button class="btn quiet" id="hideCard">Cancel</button>'+
-          '</div>'+
-          (st.mode!=="live"
-            ? '<div class="sub" style="margin:.8rem 0 0">Test card <code>4242 4242 4242 4242</code>, any future expiry, any CVC.</div>'
-            : '')+
-        '</div></div>'
-      : '');
-}
-
-/**
- * The card field, and the charge.
- *
- * Everything here talks to Stripe's own iframe. This page never sees a card
- * number, and neither does the server behind it — the browser exchanges the
- * card for a payment method id, and only that id is sent anywhere.
- */
-let cardElement = null, cardStripe = null, cardPrepared = null;
-
-async function mountCard(){
-  if(cardElement) return;
-
-  const prep = await api("/billing/clients/"+current+"/phone/prepare",{
-    method:"POST",
-    body:JSON.stringify({email: $("bEmail").value.trim(), name: $("cardName").value.trim()}),
-  });
-  cardPrepared = prep;
-
-  cardStripe = Stripe(prep.publishableKey);
-  const elements = cardStripe.elements();
-
-  // Matched to the app's own fields so it does not look like a foreign object
-  // dropped into the page, which is its own kind of thing people distrust.
-  const styles = getComputedStyle(document.body);
-  cardElement = elements.create("card", {
-    hidePostalCode: false,
-    style: {
-      base: {
-        color: styles.getPropertyValue("--ink").trim() || "#111",
-        fontFamily: styles.fontFamily,
-        fontSize: "14px",
-        "::placeholder": { color: styles.getPropertyValue("--muted").trim() || "#888" },
-      },
-      invalid: { color: styles.getPropertyValue("--bad").trim() || "#c00" },
-    },
-  });
-
-  cardElement.mount("#cardField");
-  cardElement.on("change", e => { $("cardErr").textContent = e.error ? e.error.message : ""; });
-}
-
-function unmountCard(){
-  if(cardElement){ cardElement.destroy(); cardElement = null; }
-  cardStripe = null; cardPrepared = null;
-  const err = $("cardErr"); if(err) err.textContent = "";
-}
-
-async function chargeCard(btn){
-  if(!cardStripe || !cardPrepared){ toast("Card field not ready."); return; }
-
-  const name = $("cardName").value.trim();
-  if(!name){ toast("Name on the card."); $("cardName").focus(); return; }
-
-  // Newlines are doubled because this whole file is a template literal: a
-  // single backslash-n is consumed at build time and emits a real line break
-  // inside a JavaScript string, which is a syntax error that only shows up as
-  // a blank portal. Same family as the backtick rule above.
-  const amount = $("bPlan").selectedOptions[0].textContent;
-  const also = $("bSetup").value ? "\\nplus " + $("bSetup").selectedOptions[0].textContent : "";
-  if(!confirm("Charge this card now?\\n\\n" + amount + also +
-    "\\n\\nThis takes payment immediately.")) return;
-
-  const done = working(btn, "Charging");
-  $("cardErr").textContent = "";
-
-  try{
-    // The card goes straight from the iframe to Stripe. What comes back is an
-    // id, which is the only part that touches anything of ours.
-    const result = await cardStripe.confirmCardSetup(cardPrepared.clientSecret, {
-      payment_method: {
-        card: cardElement,
-        billing_details: { name, email: $("bEmail").value.trim() },
-      },
-    });
-
-    if(result.error){
-      $("cardErr").textContent = result.error.message;
-      toast("Card declined — " + result.error.message);
-      return;
-    }
-
-    await api("/billing/clients/"+current+"/phone/subscribe",{
-      method:"POST",
-      body:JSON.stringify({
-        customerId: cardPrepared.customerId,
-        paymentMethodId: result.setupIntent.payment_method,
-        priceId: $("bPlan").value,
-        setupPriceId: $("bSetup").value || null,
-      }),
-    });
-
-    unmountCard();
-    await render();
-    toast("Charged. Stripe has emailed the receipt.", 6000);
-  }catch(err){
-    $("cardErr").textContent = err.message;
-    toast("Not charged — " + err.message, 6000);
-  } finally { done(); }
+      '<div class="sub" style="margin:.7rem 0 0"><strong>On a call?</strong> &ldquo;Key a card in Stripe&rdquo; opens Stripe&rsquo;s '+
+      'own dashboard with this client already selected, where you can type their card and start the subscription. '+
+      'It comes back here on the next refresh. No card details pass through this app at all.</div>'+
+    '</div></div>';
 }
 
 async function teamView(){
@@ -1792,30 +1661,23 @@ document.addEventListener("click", async e => {
     }
 
     /**
-     * Reveal the card field and hand it to Stripe.
+     * Key a card by hand, in Stripe.
      *
-     * Mounted on demand rather than with the page: an iframe that loads on
-     * every visit to a billing page is a card form sitting open in front of
-     * whoever walks past the screen.
+     * Creates the customer so the slug travels with it, then opens Stripe's
+     * subscription screen with that customer already chosen. A card field of
+     * our own would be an iframe, a publishable key and a script from Stripe,
+     * to rebuild a page they already ship.
      */
-    if(t.id==="showCard"){
-      const email = $("bEmail").value.trim();
-      if(!email){ toast("Their email first — the receipt has to go somewhere."); $("bEmail").focus(); return; }
-
-      $("cardCard").hidden = false;
-      $("cardCard").scrollIntoView({behavior:"smooth", block:"nearest"});
-      await mountCard();
-      return;
-    }
-
-    if(t.id==="hideCard"){
-      $("cardCard").hidden = true;
-      unmountCard();
-      return;
-    }
-
-    if(t.id==="chargeCard"){
-      await chargeCard(t);
+    if(t.id==="keyCard"){
+      const done = working(t, "Opening");
+      try{
+        const r = await api("/billing/clients/"+current+"/dashboard",{
+          method:"POST",
+          body:JSON.stringify({email: $("bEmail").value.trim(), name: (detail.settings||{}).name || ""}),
+        });
+        window.open(r.subscribeUrl, "_blank", "noopener");
+        toast("Opened in Stripe. Pick the price, key the card, then refresh here.", 6000);
+      } finally { done(); }
       return;
     }
 
@@ -2210,13 +2072,11 @@ function assertSingleScript(html: string): void {
   // inert — the page legitimately contains one, in the code that wraps the
   // graph in a script tag for pasting — because an HTML parser inside a script
   // element is looking for the close and nothing else.
-  // Two: the page's own inline script, and Stripe.js. Anything else is the
-  // sequence appearing where it was not meant to, which truncates the page.
   const closes = html.split("<" + "/script>").length - 1;
 
-  if (closes !== 2) {
+  if (closes !== 1) {
     throw new Error(
-      `The admin page must contain exactly two closing script tags, found ${closes}. ` +
+      `The admin page must contain exactly one closing script tag, found ${closes}. ` +
         `Something in src/admin/ui.ts wrote the sequence literally — most likely in a ` +
         `comment or a string — which truncates the page there and leaves the portal ` +
         `stuck on "Loading…" with a healthy server and a 200 response. Split the ` +

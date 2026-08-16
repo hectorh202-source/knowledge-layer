@@ -1,6 +1,7 @@
 import {
   allSubscriptions,
   createPaymentLink,
+  ensureCustomer,
   deactivateLink,
   invoicesFor as stripeInvoicesFor,
   listPrices,
@@ -174,7 +175,10 @@ export async function clientBilling(slug: string): Promise<ClientBilling> {
     return { account, subscription: null, invoices: [], prices: { recurring: [], oneOff: [] } };
   }
 
-  const [subscription, prices] = await Promise.all([subscriptionFor(slug), listPrices()]);
+  const [subscription, prices] = await Promise.all([
+    subscriptionFor(slug, account?.stripeCustomerId),
+    listPrices(),
+  ]);
 
   let invoices: LiveInvoice[] = [];
   if (subscription) {
@@ -198,6 +202,31 @@ export async function clientBilling(slug: string): Promise<ClientBilling> {
     invoices,
     prices,
   };
+}
+
+/**
+ * The Stripe customer for a client, created and recorded if absent.
+ *
+ * Persisting the id is what makes this safe to press twice: Stripe's search
+ * index lags behind creation by up to a minute, so a version that only searched
+ * would make a second customer and split the payment history.
+ */
+export async function ensureCustomerFor(
+  slug: string,
+  email?: string,
+  name?: string
+): Promise<string> {
+  const account = await accountFor(slug);
+  const id = await ensureCustomer(slug, account?.stripeCustomerId, email, name);
+
+  if (account?.stripeCustomerId !== id || (email && account?.contactEmail !== email)) {
+    await upsert(slug, {
+      stripe_customer_id: id,
+      ...(email ? { contact_email: email } : {}),
+    });
+  }
+
+  return id;
 }
 
 // --- the overview -----------------------------------------------------------

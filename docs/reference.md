@@ -191,25 +191,24 @@ failing when a client tries to pay it.
 
 ### Taking a card over the phone
 
-**Key a card instead** on a client's billing page opens a card field and
-charges immediately — setup fee and first month together, then monthly on the
-same card. Stripe emails the receipt.
+**Key a card in Stripe** creates the Stripe customer, carrying the tenant slug,
+and opens Stripe's own subscription screen with that customer already selected.
+Key the card there; it appears here on the next refresh.
 
-The field is an **iframe served by Stripe**. The number never enters this
-page's DOM and never reaches the server. That is what keeps the application
-in PCI DSS **SAQ A**; a plain input posting a card number to your own server
-puts you in **SAQ D**, which is an annual audit.
+A card field was built in this app first, with Stripe Elements. It worked and it
+was deleted: an iframe, a publishable key, a script from js.stripe.com and a few
+hundred lines, to reproduce a screen Stripe already ships and maintains. The
+link does the same job with none of it, and moves card handling further away
+rather than closer.
 
-Needs `STRIPE_PUBLISHABLE_KEY`, which must match the secret key's mode. A
-mismatched pair tokenises the card and then fails to attach it, so the check
-is made up front and the button is hidden rather than failing when pressed.
+The customer must exist before the link can point anywhere, and creating it is
+what carries the slug across — a subscription made by hand in the dashboard
+would otherwise have no way back to a client.
 
-The field mounts only when asked for, not with the page — a card form sitting
-open on screen is a card form in front of whoever walks past.
-
-Stripe's dashboard has a Virtual Terminal that does the same job. This exists
-because it keeps the client-to-subscription link automatic, which keying it in
-the dashboard does not.
+**Beware Stripe search.** Its index is eventually consistent: a customer created
+a second ago is not findable by metadata for up to a minute. The stored id is
+always checked first. A search-only version made a second customer every time
+the button was pressed twice, splitting one client across two records.
 
 ### What is deliberately not built
 

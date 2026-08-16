@@ -250,12 +250,24 @@ function iso(seconds: number | null | undefined): string | null {
 }
 
 function toSubscription(s: Stripe.Subscription): LiveSubscription | null {
-  const slug = s.metadata?.tenant_slug;
+  const customer = s.customer;
+
+  // The subscription's own metadata first, then the customer's.
+  //
+  // A subscription made from a payment link carries the slug. One created by
+  // hand in the Stripe dashboard does not — Stripe has no idea what a tenant
+  // slug is — and reading only the subscription would leave it orphaned, which
+  // looks exactly like the client never paid.
+  const slug =
+    s.metadata?.tenant_slug ||
+    (typeof customer === "object" && customer && !("deleted" in customer && customer.deleted)
+      ? customer.metadata?.tenant_slug
+      : undefined);
+
   if (!slug) return null;
 
   const item = s.items.data[0];
   const price = item?.price;
-  const customer = s.customer;
 
   // The renewal date moved onto the item in recent API versions; the
   // subscription-level field is gone, so read it where it now lives.
@@ -308,19 +320,136 @@ export async function allSubscriptions(): Promise<Map<string, LiveSubscription>>
   }
 }
 
-export async function subscriptionFor(slug: string): Promise<LiveSubscription | null> {
+export async function subscriptionFor(
+  slug: string,
+  knownCustomerId?: string | null
+): Promise<LiveSubscription | null> {
+  const clean = slug.replace(/'/g, "");
+
   try {
-    const found = await stripe().subscriptions.search({
-      query: `metadata['tenant_slug']:'${slug.replace(/'/g, "")}'`,
+    const all: LiveSubscription[] = [];
+
+    const bySubscription = await stripe().subscriptions.search({
+      query: `metadata['tenant_slug']:'${clean}'`,
       limit: 20,
       expand: ["data.customer"],
     });
+    for (const s of bySubscription.data) {
+      const sub = toSubscription(s);
+      if (sub) all.push(sub);
+    }
 
-    const all = found.data.map(toSubscription).filter((s): s is LiveSubscription => s !== null);
+    // Search does not look through to the customer, so a subscription created
+    // in the Stripe dashboard has to be found the other way round: locate the
+    // customer by slug, then list what they are subscribed to.
+    if (all.length === 0) {
+      // The stored id first — search will not see a customer created moments
+      // ago, so a client set up by hand in the dashboard would look unpaid
+      // until Stripe's index caught up.
+      const customer = knownCustomerId || (await customerFor(clean));
+      if (customer) {
+        const list = await stripe().subscriptions.list({
+          customer,
+          status: "all",
+          limit: 20,
+          expand: ["data.customer"],
+        });
+        for (const s of list.data) {
+          const sub = toSubscription(s);
+          if (sub) all.push(sub);
+        }
+      }
+    }
+
     return all.find((s) => s.live) ?? all[0] ?? null;
   } catch (error) {
     throw readable(error);
   }
+}
+
+/** The Stripe customer carrying this slug, if one exists. */
+export async function customerFor(slug: string): Promise<string | null> {
+  try {
+    const found = await stripe().customers.search({
+      query: `metadata['tenant_slug']:'${slug.replace(/'/g, "")}'`,
+      limit: 1,
+    });
+    return found.data[0]?.id ?? null;
+  } catch (error) {
+    throw readable(error);
+  }
+}
+
+/**
+ * The customer for a client, created if absent.
+ *
+ * `known` is the id we already recorded, and it is checked first for a reason
+ * that cost a duplicate customer to find: **Stripe's search index is eventually
+ * consistent.** A customer created a second ago is not findable by metadata for
+ * up to a minute, so a search-only version returns nothing, creates another,
+ * and splits one client's payment history across two records.
+ *
+ * Search is still the fallback, for a customer that exists in Stripe but whose
+ * id was never stored here.
+ */
+export async function ensureCustomer(
+  slug: string,
+  known?: string | null,
+  email?: string,
+  name?: string
+): Promise<string> {
+  try {
+    if (known) {
+      try {
+        const found = await stripe().customers.retrieve(known);
+        if (!found.deleted) {
+          if (email && "email" in found && found.email !== email) {
+            await stripe().customers.update(known, { email });
+          }
+          return known;
+        }
+      } catch {
+        // Deleted in the dashboard. Fall through and make a new one; the
+        // alternative is every future call failing against a dead id.
+      }
+    }
+
+    const searched = await customerFor(slug);
+    if (searched) {
+      if (email) await stripe().customers.update(searched, { email });
+      return searched;
+    }
+
+    const created = await stripe().customers.create({
+      email: email || undefined,
+      name: name || slug,
+      metadata: { tenant_slug: slug },
+    });
+    return created.id;
+  } catch (error) {
+    throw readable(error);
+  }
+}
+
+/**
+ * Where to send someone to key a card by hand.
+ *
+ * Stripe's dashboard, with the customer already chosen. Building a card field
+ * in this app instead meant an iframe, a publishable key, a script from
+ * js.stripe.com and a few hundred lines — to reproduce a screen Stripe already
+ * ships, maintains, and keeps out of our PCI scope entirely.
+ *
+ * The test dashboard lives under /test, so the link follows the key's mode
+ * rather than dropping someone into live by default.
+ */
+export function dashboardSubscriptionUrl(customerId: string): string {
+  const prefix = stripeMode() === "live" ? "" : "/test";
+  return `https://dashboard.stripe.com${prefix}/subscriptions/create?customer=${customerId}`;
+}
+
+export function dashboardCustomerUrl(customerId: string): string {
+  const prefix = stripeMode() === "live" ? "" : "/test";
+  return `https://dashboard.stripe.com${prefix}/customers/${customerId}`;
 }
 
 export interface LiveInvoice {
@@ -374,145 +503,6 @@ export async function openInvoices(): Promise<{ customerId: string; amountCents:
     }
 
     return out;
-  } catch (error) {
-    throw readable(error);
-  }
-}
-
-// --- taking a card on the phone ---------------------------------------------
-
-/**
- * The publishable key, for the card field in the browser.
- *
- * Safe to send to a page — that is what it is for. It can create tokens and
- * nothing else. The secret key must never leave the server.
- *
- * Derived from the secret key's mode so the two cannot disagree: a live
- * publishable key on a page whose server is in test mode produces a card that
- * tokenises and then fails to attach, with nothing saying why.
- */
-export function publishableKey(): string | null {
-  const key = process.env.STRIPE_PUBLISHABLE_KEY?.trim();
-  if (!key) return null;
-
-  const mode = stripeMode();
-  const keyMode = key.startsWith("pk_live_") ? "live" : "test";
-  if (mode && keyMode !== mode) {
-    throw new Error(
-      `STRIPE_PUBLISHABLE_KEY is a ${keyMode} key but STRIPE_SECRET_KEY is ${mode}. ` +
-        "They must match — a card entered against a mismatched pair tokenises and then fails to attach."
-    );
-  }
-  return key;
-}
-
-export interface PhoneSetup {
-  customerId: string;
-  clientSecret: string;
-  publishableKey: string;
-}
-
-/**
- * Prepare to take a card over the phone.
- *
- * Creates the customer and a SetupIntent. The card itself is collected by
- * Stripe's own iframe in the browser and never reaches this server, which is
- * the whole point: the alternative puts the operator's machine and this
- * application inside PCI scope.
- *
- * An email is required. A receipt has to go somewhere, and a card taken on a
- * phone call with no record sent to the customer is the shape of a dispute.
- */
-export async function preparePhonePayment(input: {
-  slug: string;
-  email: string;
-  name: string;
-}): Promise<PhoneSetup> {
-  const pk = publishableKey();
-  if (!pk) {
-    throw new Error(
-      "STRIPE_PUBLISHABLE_KEY is not set. It is needed for the card field, and is safe to expose."
-    );
-  }
-  if (!input.email.trim()) throw new Error("An email is required — the receipt has to go somewhere.");
-
-  try {
-    // Reuse a customer already on this slug rather than making a second one.
-    // Two customers for one client splits their payment history in half.
-    const found = await stripe().customers.search({
-      query: `metadata['tenant_slug']:'${input.slug.replace(/'/g, "")}'`,
-      limit: 1,
-    });
-
-    const customer =
-      found.data[0] ??
-      (await stripe().customers.create({
-        email: input.email.trim(),
-        name: input.name.trim() || input.slug,
-        metadata: { tenant_slug: input.slug },
-      }));
-
-    const intent = await stripe().setupIntents.create({
-      customer: customer.id,
-      usage: "off_session",
-      // Cards only. A phone call cannot complete a bank redirect or a wallet.
-      payment_method_types: ["card"],
-      metadata: { tenant_slug: input.slug, taken: "by phone" },
-    });
-
-    if (!intent.client_secret) throw new Error("Stripe returned no client secret.");
-
-    return { customerId: customer.id, clientSecret: intent.client_secret, publishableKey: pk };
-  } catch (error) {
-    throw readable(error);
-  }
-}
-
-/**
- * Start the subscription on a card already collected.
- *
- * Charges immediately — the first invoice carries the setup fee and the first
- * month together, exactly as the payment link does, so a client onboarded by
- * phone and one who paid a link end up in the same state.
- *
- * Stripe emails the receipt. Building that here would mean an email provider
- * and a template that has to stay correct as prices change, to send something
- * Stripe already sends better.
- */
-export async function subscribeWithCard(input: {
-  slug: string;
-  customerId: string;
-  paymentMethodId: string;
-  priceId: string;
-  setupPriceId?: string | null;
-}): Promise<LiveSubscription> {
-  try {
-    // Attach and make default before subscribing. A subscription created
-    // against a customer with no default card goes straight to incomplete and
-    // the first charge never happens.
-    await stripe().paymentMethods.attach(input.paymentMethodId, { customer: input.customerId });
-    await stripe().customers.update(input.customerId, {
-      invoice_settings: { default_payment_method: input.paymentMethodId },
-    });
-
-    const created = await stripe().subscriptions.create(
-      {
-        customer: input.customerId,
-        items: [{ price: input.priceId }],
-        // The setup fee rides on the first invoice rather than as a separate
-        // charge, so the client sees one payment for the amount they agreed.
-        add_invoice_items: input.setupPriceId ? [{ price: input.setupPriceId }] : undefined,
-        default_payment_method: input.paymentMethodId,
-        payment_behavior: "error_if_incomplete",
-        metadata: { tenant_slug: input.slug, taken: "by phone" },
-        expand: ["customer"],
-      },
-      { idempotencyKey: `kl-phone-${input.slug}-${input.paymentMethodId}` }
-    );
-
-    const sub = toSubscription(created);
-    if (!sub) throw new Error("Subscription created but carried no client reference.");
-    return sub;
   } catch (error) {
     throw readable(error);
   }

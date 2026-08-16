@@ -4,6 +4,7 @@ import {
   accountFor,
   billingEnabled,
   clientBilling,
+  ensureCustomerFor,
   saveAccount,
   startBilling,
   summary,
@@ -11,14 +12,13 @@ import {
 import {
   billingPortalUrl,
   cancelSubscription,
+  dashboardCustomerUrl,
+  dashboardSubscriptionUrl,
   ping,
-  preparePhonePayment,
-  publishableKey,
   resumeSubscription,
   seedCatalog,
   stripeEnabled,
   stripeMode,
-  subscribeWithCard,
   subscriptionFor,
 } from "../billing/stripe";
 
@@ -83,19 +83,7 @@ export function billingRoutes(visibleSlugs: (req: Request) => Promise<string[]>)
     try {
       res.json({
         ...(await clientBilling(req.params.slug)),
-        stripe: {
-          enabled: stripeEnabled(),
-          mode: stripeMode(),
-          // Whether the card field can be offered at all. Reported rather than
-          // assumed, so the button is absent instead of failing when pressed.
-          canTakeCard: (() => {
-            try {
-              return Boolean(publishableKey());
-            } catch {
-              return false;
-            }
-          })(),
-        },
+        stripe: { enabled: stripeEnabled(), mode: stripeMode() },
       });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
@@ -188,48 +176,30 @@ export function billingRoutes(visibleSlugs: (req: Request) => Promise<string[]>)
   });
 
   /**
-   * Step one of taking a card on a call: a customer and a SetupIntent.
+   * A way into Stripe's dashboard for this client, with the customer created.
    *
-   * Returns the publishable key and a client secret. The card itself is
-   * collected by Stripe's iframe in the browser and never reaches this server
-   * — which is what keeps this application out of PCI scope.
+   * For keying a card on a call. Building a card field here instead meant an
+   * iframe, a publishable key and a script from js.stripe.com, to reproduce a
+   * screen Stripe already ships — and to move card handling closer to us,
+   * which is the opposite of the direction worth travelling.
+   *
+   * Creating the customer first is what makes it work: it carries the tenant
+   * slug, so a subscription made by hand in the dashboard still finds its way
+   * back to the right client.
    */
-  router.post("/clients/:slug/phone/prepare", async (req: Request, res: Response) => {
+  router.post("/clients/:slug/dashboard", async (req: Request, res: Response) => {
     try {
-      res.json(
-        await preparePhonePayment({
-          slug: req.params.slug,
-          email: String(req.body?.email ?? ""),
-          name: String(req.body?.name ?? ""),
-        })
+      const customerId = await ensureCustomerFor(
+        req.params.slug,
+        String(req.body?.email ?? "") || undefined,
+        String(req.body?.name ?? "") || undefined
       );
-    } catch (error) {
-      res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
-    }
-  });
 
-  /**
-   * Step two: subscribe on the card the browser just tokenised.
-   *
-   * Charges immediately — setup fee and first month together, the same amount
-   * a payment link would take, so a client onboarded by phone ends up in
-   * exactly the state one who paid a link does. Stripe emails the receipt.
-   */
-  router.post("/clients/:slug/phone/subscribe", async (req: Request, res: Response) => {
-    try {
-      const { customerId, paymentMethodId, priceId, setupPriceId } = req.body ?? {};
-      if (!customerId || !paymentMethodId) throw new Error("The card was not collected.");
-      if (!priceId) throw new Error("Pick a plan.");
-
-      const subscription = await subscribeWithCard({
-        slug: req.params.slug,
-        customerId: String(customerId),
-        paymentMethodId: String(paymentMethodId),
-        priceId: String(priceId),
-        setupPriceId: setupPriceId ? String(setupPriceId) : null,
+      res.json({
+        customerId,
+        subscribeUrl: dashboardSubscriptionUrl(customerId),
+        customerUrl: dashboardCustomerUrl(customerId),
       });
-
-      res.json({ subscription });
     } catch (error) {
       res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
     }
