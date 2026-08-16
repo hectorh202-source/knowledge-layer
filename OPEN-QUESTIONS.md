@@ -586,6 +586,53 @@ biggest hidden benefit of the channel for a solo builder — worth giving up mar
 
 ---
 
+## 7.9 BASELINE — the Tier 1 test, run for the first time
+
+**Date:** 2026-08-16. Query: *junk removal in Port Charlotte*, asked of three
+engines on the same day. Record this verbatim; the only honest measure of
+whether any of this work moves anything is the same three queries repeated later.
+
+**Important caveat on attribution.** Our markup went live roughly an hour before
+this test. No crawler will have re-read the site yet, so this is the state
+*before* our work landed — a control, not a result.
+
+| Engine | Junk Chucker | Answer built from |
+|---|---|---|
+| Gemini | **not shown** | Google's local index — every business shown had a street address |
+| ChatGPT | listed 5th of 5, no phone, no source badge, **excluded from the closing recommendation** | web pages |
+| Perplexity | **absent** from a table of six | local listings and directories |
+
+**The finding that matters.** Perplexity listed *Daniel's Junk Removal, 5★ from
+**one** review*. Junk Chucker has 5.0 from **60** reviews and did not appear.
+This is not a quality, reputation or markup problem. Perplexity's own wording —
+"listed as open 24 hours", "rated 5.0 from 96 reviews", "listed in local
+listings" — shows it is retrieving directory listings. Junk Chucker has one
+confirmed directory presence (Facebook) and seven unknown.
+
+**A business with one review beats a business with sixty by being present in the
+sources that get retrieved.** Two of three engines never got as far as our
+markup, which is exactly the retrieval-before-understanding argument the
+directory audit was built on.
+
+**Second pattern, present in all three.** The businesses that earn a
+*recommendation* rather than a mention publish numbers: "$125 minimum", "$79 for
+one bulky item", "estimates by text from photos". Junk Chucker's ChatGPT entry —
+"handles everything from single-item pickups to full cleanouts" — is the vaguest
+line on the page, and it is the reason it is named and then left out of the
+shortlist.
+
+**Actions this ranks, in order:**
+1. Directory listings — Yelp, BBB, Angi, Bing Places, Apple Maps, Thumbtack.
+   Account creation, roughly an afternoon, and on this evidence the highest
+   return available. The prefilled searches are in the directory audit.
+2. Pricing content — a minimum charge and two or three anchors. Tier 2's top
+   item, now with direct evidence behind it.
+3. Nothing in the app. No build would have changed any of these three answers.
+
+**Re-run:** 2026-09-06 or later, same query, same three engines.
+
+---
+
 ## 8. Claims from the video still unverified
 
 ### 8.1 Google's "knowledge catalog" product for businesses
