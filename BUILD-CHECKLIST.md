@@ -27,6 +27,22 @@ required for that. Most of it is settings and audit work, not building.
       adapter would use later (OPEN-QUESTIONS 2.1).
       Hostinger also flagged three site issues, all Tier 2 work: sitemap pollution,
       duplicate geo pages, and utility pages needing `noindex`.
+
+      **BLOCKED — needs owner authorization before proceeding.** Adding the domain
+      to Cloudflare means changing nameservers, which moves *all* DNS including
+      email. Preconditions before that switch:
+      - Get written sign-off from the owner. This can take email down if botched.
+      - Export the current zone from wherever DNS is authoritative today, and diff
+        it against what Cloudflare imports. The real risk is a missed record — MX,
+        SPF/DKIM TXT, or an unusual subdomain — not the move itself. Nothing breaks
+        until nameservers change, so the diff is the whole safety net.
+      - Nameservers were changed recently. Let that fully propagate first; moving
+        again mid-propagation makes any failure far harder to diagnose.
+      - Decide who owns the Cloudflare account before creating it (OPEN-QUESTIONS
+        2.4). Recommendation on file: client-owned, us as a member.
+
+      **Not a blocker for anything else.** Cloudflare only fixes the GPTBot check.
+      All 10 manual items below need no DNS changes.
       **GPTBot gets a consistent `429 Too Many Requests`** across spaced retries,
       while a browser user agent gets `200` with identical timing. Response
       headers identify **Hostinger's CDN edge (`Server: hcdn`)** — `Content-Length: 0`,
